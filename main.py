@@ -126,31 +126,14 @@ def get_alpha_map(size: int) -> np.ndarray:
 
 def remove_gemini_watermark(image_bytes: bytes) -> bytes:
 	"""
-	Detect and remove Gemini watermark using Reverse Alpha Blending.
+	Remove Gemini watermark using Reverse Alpha Blending.
+	This function is called from the proxy endpoint, so images are already
+	guaranteed to be from Gemini — no metadata detection needed.
 	"""
 	try:
 		with Image.open(io.BytesIO(image_bytes)) as img:
-			# Check EXIF for Gemini credit
-			exif = img.getexif()
-			# Tag 0x0110 is Model, 0x010f is Make, 0x8298 is Copyright. 
-			# In the JS version they use 'exifr' which parses XMP. 
-			# PIL's basic EXIF might not have it, but we can check the whole thing.
-			is_gemini = False
-			# Look for "Made with Google AI" in any string metadata
-			info = img.info
-			if "Credit" in info and info["Credit"] == "Made with Google AI":
-				is_gemini = True
-			elif hasattr(img, "app") and b"Made with Google AI" in str(img.app).encode():
-				is_gemini = True
-			
 			width, height = img.size
-			
-			# Log detection status
-			if is_gemini:
-				logger.info("Confirmed Gemini image via metadata")
-			else:
-				logger.info("Not a Gemini image")
-				return image_bytes
+			logger.info(f"Removing Gemini watermark from {width}x{height} image")
 
 			if width > 1024 and height > 1024:
 				logo_size = 96
