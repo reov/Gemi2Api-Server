@@ -2,6 +2,7 @@ import asyncio
 import base64
 import hmac
 import hashlib
+import io
 import json
 import logging
 import os
@@ -12,9 +13,12 @@ import time
 import uuid
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Union
+
 from urllib.parse import quote, urlparse
 
 import httpx
+import numpy as np
+from PIL import Image
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -89,6 +93,79 @@ def load_or_generate_secret() -> str:
 
 
 SIGNATURE_SECRET = load_or_generate_secret()
+
+# Watermark removal constants
+ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
+ALPHA_MAP_CACHE = {}
+
+
+def get_alpha_map(size: int) -> np.ndarray:
+	"""Load and cache the alpha map from the background capture image."""
+	if size in ALPHA_MAP_CACHE:
+		return ALPHA_MAP_CACHE[size]
+
+	bg_path = os.path.join(ASSETS_DIR, f"bg_{size}.png")
+	if not os.path.exists(bg_path):
+		logger.warning(f"Watermark asset not found: {bg_path}")
+		return None
+
+	try:
+		with Image.open(bg_path) as img:
+			img_data = np.array(img.convert("RGB"))
+			alpha_map = np.max(img_data, axis=2) / 255.0
+			ALPHA_MAP_CACHE[size] = alpha_map
+			return alpha_map
+	except Exception as e:
+		logger.error(f"Error loading alpha map {size}: {e}")
+		return None
+
+
+def remove_gemini_watermark(image_bytes: bytes) -> bytes:
+	"""Remove Gemini watermark using Reverse Alpha Blending."""
+	try:
+		with Image.open(io.BytesIO(image_bytes)) as img:
+			width, height = img.size
+			orig_format = img.format
+
+			if width > 1024 and height > 1024:
+				logo_size, margin = 96, 64
+			else:
+				logo_size, margin = 48, 32
+
+			alpha_map = get_alpha_map(logo_size)
+			if alpha_map is None:
+				return image_bytes
+
+			x = width - margin - logo_size
+			y = height - margin - logo_size
+			if x < 0 or y < 0:
+				logger.warning(f"Image too small for watermark removal: {width}x{height}")
+				return image_bytes
+
+			# Reverse Alpha Blending: original = (watermarked - α × 255) / (1 - α)
+			img_array = np.array(img.convert("RGB")).astype(np.float64)
+			roi = img_array[y:y+logo_size, x:x+logo_size].copy()
+
+			alpha = np.clip(alpha_map, 0.002, 0.99)
+			alpha_expanded = np.expand_dims(alpha, axis=2)
+			cleaned_roi = (roi - alpha_expanded * 255.0) / (1.0 - alpha_expanded)
+			cleaned_roi = np.clip(np.round(cleaned_roi), 0, 255).astype(np.uint8)
+
+			img_array_uint8 = np.array(img.convert("RGB"))
+			img_array_uint8[y:y+logo_size, x:x+logo_size] = cleaned_roi
+
+			out_io = io.BytesIO()
+			save_format = orig_format or "PNG"
+			if save_format.upper() == "JPEG":
+				Image.fromarray(img_array_uint8).save(out_io, format="JPEG", quality=95)
+			else:
+				Image.fromarray(img_array_uint8).save(out_io, format=save_format)
+			return out_io.getvalue()
+
+	except Exception as e:
+		logger.error(f"Error removing watermark: {e}")
+		return image_bytes
+
 
 # Print debug info at startup
 if not SECURE_1PSID or not SECURE_1PSIDTS:
@@ -543,7 +620,10 @@ async def proxy_image(url: str, sig: str):
 
 	async with httpx.AsyncClient(http2=True, cookies=jar, follow_redirects=True) as client:
 		try:
-			async with client.stream("GET", url, timeout=15.0, headers=headers) as resp:
+			# Fetch original resolution to keep watermark at expected size/position
+			fetch_url = re.sub(r"=s\d+$", "=s0", url) if re.search(r"=s\d+$", url) else url + "=s0"
+
+			async with client.stream("GET", fetch_url, timeout=15.0, headers=headers) as resp:
 				if resp.status_code != 200:
 					logger.error(f"Google returned {resp.status_code} for image: {url}")
 				
@@ -563,8 +643,15 @@ async def proxy_image(url: str, sig: str):
 				else:
 					media_type = upstream_content_type
 
+				# Process watermark removal
+				if media_type in ["image/png", "image/jpeg", "image/webp"]:
+					logger.info(f"Checking for Gemini watermark on {url}")
+					processed_content = remove_gemini_watermark(bytes(content))
+				else:
+					processed_content = bytes(content)
+
 				return Response(
-					content=bytes(content),
+					content=processed_content,
 					media_type=media_type,
 					headers={
 						"Cross-Origin-Resource-Policy": "cross-origin",

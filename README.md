@@ -106,6 +106,10 @@ docker-compose up -d --build
 6. 更新 `.env` 文件
 7. 重新构建并启动: `docker-compose up -d --build`
 
+## 致谢
+
+- 图片去水印算法基于 [journey-ad/gemini-watermark-remover](https://github.com/journey-ad/gemini-watermark-remover)以及[allenk/GeminiWatermarkTool](https://github.com/allenk/GeminiWatermarkTool)实现，并直接使用了其中的两张png图片。
+
 ## 贡献
 
 同时感谢以下开发者对 `Gemi2Api-Server` 作出的贡献：
