@@ -2,6 +2,7 @@ import asyncio
 import base64
 import hmac
 import hashlib
+import io
 import json
 import logging
 import os
@@ -12,9 +13,12 @@ import time
 import uuid
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Union
+
 from urllib.parse import quote, urlparse
 
 import httpx
+import numpy as np
+from PIL import Image
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -89,6 +93,108 @@ def load_or_generate_secret() -> str:
 
 
 SIGNATURE_SECRET = load_or_generate_secret()
+
+# Watermark removal constants
+ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
+ALPHA_MAP_CACHE = {}
+
+
+def get_alpha_map(size: int) -> np.ndarray:
+	"""
+	Load and cache the alpha map from the background capture image.
+	"""
+	if size in ALPHA_MAP_CACHE:
+		return ALPHA_MAP_CACHE[size]
+
+	bg_path = os.path.join(ASSETS_DIR, f"bg_{size}.png")
+	if not os.path.exists(bg_path):
+		logger.warning(f"Watermark asset not found: {bg_path}")
+		return None
+
+	try:
+		with Image.open(bg_path) as img:
+			# Convert to RGB and then to numpy array
+			img_data = np.array(img.convert("RGB"))
+			# Extract max channel and normalize to [0, 1]
+			alpha_map = np.max(img_data, axis=2) / 255.0
+			ALPHA_MAP_CACHE[size] = alpha_map
+			return alpha_map
+	except Exception as e:
+		logger.error(f"Error loading alpha map {size}: {e}")
+		return None
+
+
+def remove_gemini_watermark(image_bytes: bytes) -> bytes:
+	"""
+	Detect and remove Gemini watermark using Reverse Alpha Blending.
+	"""
+	try:
+		with Image.open(io.BytesIO(image_bytes)) as img:
+			# Check EXIF for Gemini credit
+			exif = img.getexif()
+			# Tag 0x0110 is Model, 0x010f is Make, 0x8298 is Copyright. 
+			# In the JS version they use 'exifr' which parses XMP. 
+			# PIL's basic EXIF might not have it, but we can check the whole thing.
+			is_gemini = False
+			# Look for "Made with Google AI" in any string metadata
+			info = img.info
+			if "Credit" in info and info["Credit"] == "Made with Google AI":
+				is_gemini = True
+			elif hasattr(img, "app") and b"Made with Google AI" in str(img.app).encode():
+				is_gemini = True
+			
+			width, height = img.size
+			
+			# Log detection status
+			if is_gemini:
+				logger.info("Confirmed Gemini image via metadata")
+			else:
+				logger.info("Not a Gemini image")
+				return image_bytes
+
+			if width > 1024 and height > 1024:
+				logo_size = 96
+				margin = 64
+			else:
+				logo_size = 48
+				margin = 32
+
+			alpha_map = get_alpha_map(logo_size)
+			if alpha_map is None:
+				return image_bytes
+
+			# Define watermark area
+			x = width - margin - logo_size
+			y = height - margin - logo_size
+			
+			# Convert image to numpy array for fast processing
+			# We need to work in float for the math
+			img_array = np.array(img.convert("RGB")).astype(float)
+			
+			# Extract the region of interest
+			roi = img_array[y:y+logo_size, x:x+logo_size]
+			
+			# Reverse Alpha Blending formula: original = (watermarked - alpha * logo) / (1 - alpha)
+			# logo = 255 (white watermark)
+			alpha = np.clip(alpha_map, 0.002, 0.99) # Avoid division by zero
+			alpha_expanded = np.expand_dims(alpha, axis=2) # Match RGB channels
+			
+			cleaned_roi = (roi - alpha_expanded * 255.0) / (1.0 - alpha_expanded)
+			cleaned_roi = np.clip(np.round(cleaned_roi), 0, 255).astype(np.uint8)
+			
+			# Put it back
+			img_array_uint8 = np.array(img.convert("RGB"))
+			img_array_uint8[y:y+logo_size, x:x+logo_size] = cleaned_roi
+			
+			# Save back to bytes
+			out_io = io.BytesIO()
+			Image.fromarray(img_array_uint8).save(out_io, format=img.format or "PNG")
+			return out_io.getvalue()
+			
+	except Exception as e:
+		logger.error(f"Error removing watermark: {e}")
+		return image_bytes
+
 
 # Print debug info at startup
 if not SECURE_1PSID or not SECURE_1PSIDTS:
@@ -563,8 +669,15 @@ async def proxy_image(url: str, sig: str):
 				else:
 					media_type = upstream_content_type
 
+				# Process watermark removal
+				if media_type in ["image/png", "image/jpeg", "image/webp"]:
+					logger.info(f"Checking for Gemini watermark on {url}")
+					processed_content = remove_gemini_watermark(bytes(content))
+				else:
+					processed_content = bytes(content)
+
 				return Response(
-					content=bytes(content),
+					content=processed_content,
 					media_type=media_type,
 					headers={
 						"Cross-Origin-Resource-Policy": "cross-origin",
