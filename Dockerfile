@@ -8,6 +8,7 @@ RUN uv sync
 
 # Copy application code
 COPY main.py .
+COPY assets/ assets/
 
 # Expose the port the app runs on
 EXPOSE 8000
