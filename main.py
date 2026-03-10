@@ -434,6 +434,25 @@ def get_image_signature(url: str) -> str:
 	return hmac.new(secret, url.encode(), hashlib.sha256).hexdigest()
 
 
+def postprocess_text(text: str) -> str:
+	"""Apply text cleanup and markdown corrections to response text."""
+	text = text.replace("&lt;", "<").replace("\\<", "<").replace("\\_", "_").replace("\\>", ">")
+	return correct_markdown(text)
+
+
+def extract_image_markdown(response, base_url: str) -> str:
+	"""Extract images from a response and return markdown image links."""
+	result = ""
+	if hasattr(response, "images") and response.images:
+		for img in response.images:
+			img_url = getattr(img, "url", None)
+			if img_url:
+				sig = get_image_signature(img_url)
+				proxy_url = f"{base_url}/gemini-proxy/image?url={quote(img_url)}&sig={sig}"
+				result += f"\n\n![🎨 Loading image...]({proxy_url})"
+	return result
+
+
 @app.post("/v1/chat/completions")
 async def create_chat_completion(request: ChatCompletionRequest, raw_request: Request, api_key: str = Depends(verify_api_key)):
 	try:
@@ -453,96 +472,151 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 		model = map_model_name(request.model)
 		logger.info(f"Using model: {model}")
 
-		# 生成响应
-		logger.info("Sending request to Gemini...")
-		if temp_files:
-			# With files
-			response = await gemini_client.generate_content(conversation, files=temp_files, model=model)
-		else:
-			# Text only
-			response = await gemini_client.generate_content(conversation, model=model)
-
-		# 清理临时文件
-		for temp_file in temp_files:
-			try:
-				os.unlink(temp_file)
-			except Exception as e:
-				logger.warning(f"Failed to delete temp file {temp_file}: {str(e)}")
-
-		# 提取文本响应
-		reply_text = ""
-		# 提取思考内容
-		if ENABLE_THINKING and hasattr(response, "thoughts"):
-			reply_text += f"<think>{response.thoughts}</think>"
-		if hasattr(response, "text"):
-			reply_text += response.text
-		else:
-			reply_text += str(response)
-		# 提取并追加图片响应
-		if hasattr(response, "images") and response.images:
-			base_url = PUBLIC_BASE_URL or str(raw_request.base_url).rstrip("/")
-			for img in response.images:
-				# 检查对象是否有 url 属性
-				img_url = getattr(img, "url", None)
-				if img_url:
-					sig = get_image_signature(img_url)
-					proxy_url = f"{base_url}/gemini-proxy/image?url={quote(img_url)}&sig={sig}"
-					reply_text += f"\n\n![image]({proxy_url})"
-		reply_text = reply_text.replace("&lt;", "<").replace("\\<", "<").replace("\\_", "_").replace("\\>", ">")
-		reply_text = correct_markdown(reply_text)
-
-		logger.info(f"Response: {reply_text}")
-
-		if not reply_text or reply_text.strip() == "":
-			logger.warning("Empty response received from Gemini")
-			reply_text = "服务器返回了空响应。请检查 Gemini API 凭据是否有效。"
-
 		# 创建响应对象
 		completion_id = f"chatcmpl-{uuid.uuid4()}"
 		created_time = int(time.time())
+		base_url = PUBLIC_BASE_URL or str(raw_request.base_url).rstrip("/")
 
-		# 检查客户端是否请求流式响应
+		# Prepare generate_content arguments
+		gen_kwargs = {"model": model}
+		if temp_files:
+			gen_kwargs["files"] = temp_files
+
 		if request.stream:
-			# 实现流式响应
+			# Real streaming using upstream generate_content_stream
 			async def generate_stream():
-				# 创建 SSE 格式的流式响应
-				# 先发送开始事件
-				data = {
-					"id": completion_id,
-					"object": "chat.completion.chunk",
-					"created": created_time,
-					"model": request.model,
-					"choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
-				}
-				yield f"data: {json.dumps(data)}\n\n"
+				try:
+					logger.info("Starting streaming response from Gemini...")
 
-				# 模拟流式输出 - 将文本按字符分割发送
-				for char in reply_text:
-					data = {
-						"id": completion_id,
-						"object": "chat.completion.chunk",
-						"created": created_time,
-						"model": request.model,
-						"choices": [{"index": 0, "delta": {"content": char}, "finish_reason": None}],
-					}
-					yield f"data: {json.dumps(data)}\n\n"
-					# 可选：添加短暂延迟以模拟真实的流式输出
-					await asyncio.sleep(0.01)
+					def make_chunk(delta: dict, finish_reason=None):
+						return "data: " + json.dumps({
+							"id": completion_id,
+							"object": "chat.completion.chunk",
+							"created": created_time,
+							"model": request.model,
+							"choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+						}) + "\n\n"
 
-				# 发送结束事件
-				data = {
-					"id": completion_id,
-					"object": "chat.completion.chunk",
-					"created": created_time,
-					"model": request.model,
-					"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-				}
-				yield f"data: {json.dumps(data)}\n\n"
-				yield "data: [DONE]\n\n"
+					# Send initial role chunk
+					yield make_chunk({"role": "assistant"})
+
+					thinking_started = False
+					thinking_ended = False
+					yielded_images = 0
+					text_buffer = ""
+
+					async for chunk in gemini_client.generate_content_stream(conversation, **gen_kwargs):
+
+						# Handle thinking/thoughts delta
+						if ENABLE_THINKING and hasattr(chunk, "thoughts_delta") and chunk.thoughts_delta:
+							if not thinking_started:
+								yield make_chunk({"content": "<think>\n"})
+								thinking_started = True
+							
+							# Also include reasoning_content for full Open WebUI native compatibility
+							yield make_chunk({
+								"content": chunk.thoughts_delta,
+								"reasoning_content": chunk.thoughts_delta
+							})
+
+						# Handle text delta
+						if hasattr(chunk, "text_delta") and chunk.text_delta:
+							# Close thinking tag before first text content
+							if thinking_started and not thinking_ended:
+								thinking_ended = True
+								yield make_chunk({"content": "\n</think>\n\n"})
+							
+							text_buffer += chunk.text_delta
+							safe_to_yield = False
+							
+							# Yield if buffer ends with whitespace and looks like it's outside a markdown link
+							if text_buffer[-1].isspace() and text_buffer.count('[') == text_buffer.count(']') and text_buffer.count('(') == text_buffer.count(')'):
+								safe_to_yield = True
+							elif len(text_buffer) > 500:
+								safe_to_yield = True
+							
+							if safe_to_yield:
+								yield make_chunk({"content": postprocess_text(text_buffer)})
+								text_buffer = ""
+
+						# Handle inline images as they arrive
+						if hasattr(chunk, "images") and chunk.images and len(chunk.images) > yielded_images:
+							# Close thinking tag if an image arrives before any text
+							if thinking_started and not thinking_ended:
+								thinking_ended = True
+								yield make_chunk({"content": "\n</think>\n\n"})
+
+							new_images = chunk.images[yielded_images:]
+							for img in new_images:
+								img_url = getattr(img, "url", None)
+								if img_url:
+									sig = get_image_signature(img_url)
+									proxy_url = f"{base_url}/gemini-proxy/image?url={quote(img_url)}&sig={sig}"
+									img_md = f"\n\n![🎨 Loading image...]({proxy_url})\n\n"
+									yield make_chunk({"content": img_md})
+							yielded_images = len(chunk.images)
+
+					# Flush any remaining text
+					if text_buffer:
+						yield make_chunk({"content": postprocess_text(text_buffer)})
+
+					# Close thinking tag if it was never closed
+					if thinking_started and not thinking_ended:
+						yield make_chunk({"content": "\n</think>\n\n"})
+
+					# Send finish chunk
+					yield make_chunk({}, finish_reason="stop")
+					yield "data: [DONE]\n\n"
+
+					logger.info("Streaming response completed")
+				except Exception as e:
+					logger.error(f"Error during streaming: {str(e)}", exc_info=True)
+					# Send error as a content chunk so the client sees it
+					error_msg = "\n\n[An internal error occurred while streaming]"
+					yield make_chunk({"content": error_msg})
+					yield make_chunk({}, finish_reason="stop")
+					yield "data: [DONE]\n\n"
+				finally:
+					# 清理临时文件
+					for temp_file in temp_files:
+						try:
+							os.unlink(temp_file)
+						except Exception as e:
+							logger.warning(f"Failed to delete temp file {temp_file}: {str(e)}")
 
 			return StreamingResponse(generate_stream(), media_type="text/event-stream")
 		else:
-			# 非流式响应（原来的逻辑）
+			# Non-streaming response
+			logger.info("Sending request to Gemini...")
+			try:
+				response = await gemini_client.generate_content(conversation, **gen_kwargs)
+			finally:
+				# 清理临时文件
+				for temp_file in temp_files:
+					try:
+						os.unlink(temp_file)
+					except Exception as e:
+						logger.warning(f"Failed to delete temp file {temp_file}: {str(e)}")
+
+			# 提取文本响应
+			reply_text = ""
+			if ENABLE_THINKING and hasattr(response, "thoughts") and response.thoughts:
+				reply_text += f"<think>\n{response.thoughts}\n</think>\n\n"
+			if hasattr(response, "text"):
+				reply_text += response.text
+			else:
+				reply_text += str(response)
+
+			# 提取并追加图片响应
+			reply_text += extract_image_markdown(response, base_url)
+			reply_text = postprocess_text(reply_text)
+
+			logger.info(f"Response: {reply_text}")
+
+			if not reply_text or reply_text.strip() == "":
+				logger.warning("Empty response received from Gemini")
+				reply_text = "Server returned an empty response. Please check that Gemini API credentials are valid."
+
 			result = {
 				"id": completion_id,
 				"object": "chat.completion",
