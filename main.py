@@ -133,7 +133,8 @@ def remove_gemini_watermark(image_bytes: bytes) -> bytes:
 	try:
 		with Image.open(io.BytesIO(image_bytes)) as img:
 			width, height = img.size
-			logger.info(f"Removing Gemini watermark from {width}x{height} image")
+			orig_format = img.format
+			logger.info(f"Removing Gemini watermark from {width}x{height} image (format={orig_format})")
 
 			if width > 1024 and height > 1024:
 				logo_size = 96
@@ -150,12 +151,19 @@ def remove_gemini_watermark(image_bytes: bytes) -> bytes:
 			x = width - margin - logo_size
 			y = height - margin - logo_size
 			
+			# Boundary check
+			if x < 0 or y < 0:
+				logger.warning(f"Image too small for watermark removal: {width}x{height}, need at least {margin + logo_size}x{margin + logo_size}")
+				return image_bytes
+
+			logger.info(f"Watermark ROI: ({x},{y}) size={logo_size}x{logo_size}, alpha_map shape={alpha_map.shape}, alpha range=[{alpha_map.min():.4f}, {alpha_map.max():.4f}]")
+			
 			# Convert image to numpy array for fast processing
 			# We need to work in float for the math
-			img_array = np.array(img.convert("RGB")).astype(float)
+			img_array = np.array(img.convert("RGB")).astype(np.float64)
 			
 			# Extract the region of interest
-			roi = img_array[y:y+logo_size, x:x+logo_size]
+			roi = img_array[y:y+logo_size, x:x+logo_size].copy()
 			
 			# Reverse Alpha Blending formula: original = (watermarked - alpha * logo) / (1 - alpha)
 			# logo = 255 (white watermark)
@@ -165,13 +173,23 @@ def remove_gemini_watermark(image_bytes: bytes) -> bytes:
 			cleaned_roi = (roi - alpha_expanded * 255.0) / (1.0 - alpha_expanded)
 			cleaned_roi = np.clip(np.round(cleaned_roi), 0, 255).astype(np.uint8)
 			
+			# Log the pixel difference to verify changes are happening
+			roi_uint8 = roi.astype(np.uint8)
+			diff = np.abs(roi_uint8.astype(int) - cleaned_roi.astype(int))
+			logger.info(f"Pixel diff stats: mean={diff.mean():.2f}, max={diff.max()}, changed_pixels={np.count_nonzero(diff)}/{diff.size}")
+			
 			# Put it back
 			img_array_uint8 = np.array(img.convert("RGB"))
 			img_array_uint8[y:y+logo_size, x:x+logo_size] = cleaned_roi
 			
-			# Save back to bytes
+			# Save back to bytes, preserving original format
 			out_io = io.BytesIO()
-			Image.fromarray(img_array_uint8).save(out_io, format=img.format or "PNG")
+			save_format = orig_format or "PNG"
+			if save_format.upper() == "JPEG":
+				Image.fromarray(img_array_uint8).save(out_io, format="JPEG", quality=95)
+			else:
+				Image.fromarray(img_array_uint8).save(out_io, format=save_format)
+			logger.info(f"Watermark removal complete, saved as {save_format}, output size={out_io.tell()} bytes")
 			return out_io.getvalue()
 			
 	except Exception as e:
