@@ -426,6 +426,7 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 					thinking_started = False
 					thinking_ended = False
 					yielded_images = 0
+					text_buffer = ""
 
 					async for chunk in gemini_client.generate_content_stream(conversation, **gen_kwargs):
 
@@ -448,7 +449,18 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 								thinking_ended = True
 								yield make_chunk({"content": "\n</think>\n\n"})
 							
-							yield make_chunk({"content": chunk.text_delta})
+							text_buffer += chunk.text_delta
+							safe_to_yield = False
+							
+							# Yield if buffer ends with whitespace and looks like it's outside a markdown link
+							if text_buffer[-1].isspace() and text_buffer.count('[') == text_buffer.count(']') and text_buffer.count('(') == text_buffer.count(')'):
+								safe_to_yield = True
+							elif len(text_buffer) > 500:
+								safe_to_yield = True
+							
+							if safe_to_yield:
+								yield make_chunk({"content": postprocess_text(text_buffer)})
+								text_buffer = ""
 
 						# Handle inline images as they arrive
 						if hasattr(chunk, "images") and chunk.images and len(chunk.images) > yielded_images:
@@ -467,6 +479,10 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 									yield make_chunk({"content": img_md})
 							yielded_images = len(chunk.images)
 
+					# Flush any remaining text
+					if text_buffer:
+						yield make_chunk({"content": postprocess_text(text_buffer)})
+
 					# Close thinking tag if it was never closed
 					if thinking_started and not thinking_ended:
 						yield make_chunk({"content": "\n</think>\n\n"})
@@ -479,7 +495,7 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 				except Exception as e:
 					logger.error(f"Error during streaming: {str(e)}", exc_info=True)
 					# Send error as a content chunk so the client sees it
-					error_msg = f"\n\n[Error: {str(e)}]"
+					error_msg = "\n\n[An internal error occurred while streaming]"
 					yield make_chunk({"content": error_msg})
 					yield make_chunk({}, finish_reason="stop")
 					yield "data: [DONE]\n\n"
@@ -508,7 +524,7 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 			# 提取文本响应
 			reply_text = ""
 			if ENABLE_THINKING and hasattr(response, "thoughts") and response.thoughts:
-				reply_text += f"<think>{response.thoughts}</think>"
+				reply_text += f"<think>\n{response.thoughts}\n</think>\n\n"
 			if hasattr(response, "text"):
 				reply_text += response.text
 			else:
@@ -522,7 +538,7 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 
 			if not reply_text or reply_text.strip() == "":
 				logger.warning("Empty response received from Gemini")
-				reply_text = "服务器返回了空响应。请检查 Gemini API 凭据是否有效。"
+				reply_text = "Server returned an empty response. Please check that Gemini API credentials are valid."
 
 			result = {
 				"id": completion_id,
