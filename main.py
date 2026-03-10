@@ -653,9 +653,11 @@ async def proxy_image(url: str, sig: str):
 			# Rewrite Google CDN size parameter to fetch original resolution
 			# The watermark is applied at original resolution, so =s512 etc. would
 			# resize the image and make the watermark position/size unpredictable
-			fetch_url = re.sub(r"=s\d+$", "=s0", url)
-			if fetch_url != url:
-				logger.info(f"Rewrote image URL for original resolution: {url.split('=')[-1]} -> s0")
+			if re.search(r"=s\d+$", url):
+				fetch_url = re.sub(r"=s\d+$", "=s0", url)
+			else:
+				fetch_url = url + "=s0"
+			logger.info(f"Fetching original resolution image: {fetch_url[-20:]}")
 
 			async with client.stream("GET", fetch_url, timeout=15.0, headers=headers) as resp:
 				if resp.status_code != 200:
