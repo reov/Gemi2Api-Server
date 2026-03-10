@@ -100,9 +100,7 @@ ALPHA_MAP_CACHE = {}
 
 
 def get_alpha_map(size: int) -> np.ndarray:
-	"""
-	Load and cache the alpha map from the background capture image.
-	"""
+	"""Load and cache the alpha map from the background capture image."""
 	if size in ALPHA_MAP_CACHE:
 		return ALPHA_MAP_CACHE[size]
 
@@ -113,9 +111,7 @@ def get_alpha_map(size: int) -> np.ndarray:
 
 	try:
 		with Image.open(bg_path) as img:
-			# Convert to RGB and then to numpy array
 			img_data = np.array(img.convert("RGB"))
-			# Extract max channel and normalize to [0, 1]
 			alpha_map = np.max(img_data, axis=2) / 255.0
 			ALPHA_MAP_CACHE[size] = alpha_map
 			return alpha_map
@@ -125,73 +121,47 @@ def get_alpha_map(size: int) -> np.ndarray:
 
 
 def remove_gemini_watermark(image_bytes: bytes) -> bytes:
-	"""
-	Remove Gemini watermark using Reverse Alpha Blending.
-	This function is called from the proxy endpoint, so images are already
-	guaranteed to be from Gemini — no metadata detection needed.
-	"""
+	"""Remove Gemini watermark using Reverse Alpha Blending."""
 	try:
 		with Image.open(io.BytesIO(image_bytes)) as img:
 			width, height = img.size
 			orig_format = img.format
-			logger.info(f"Removing Gemini watermark from {width}x{height} image (format={orig_format})")
 
 			if width > 1024 and height > 1024:
-				logo_size = 96
-				margin = 64
+				logo_size, margin = 96, 64
 			else:
-				logo_size = 48
-				margin = 32
+				logo_size, margin = 48, 32
 
 			alpha_map = get_alpha_map(logo_size)
 			if alpha_map is None:
 				return image_bytes
 
-			# Define watermark area
 			x = width - margin - logo_size
 			y = height - margin - logo_size
-			
-			# Boundary check
 			if x < 0 or y < 0:
-				logger.warning(f"Image too small for watermark removal: {width}x{height}, need at least {margin + logo_size}x{margin + logo_size}")
+				logger.warning(f"Image too small for watermark removal: {width}x{height}")
 				return image_bytes
 
-			logger.info(f"Watermark ROI: ({x},{y}) size={logo_size}x{logo_size}, alpha_map shape={alpha_map.shape}, alpha range=[{alpha_map.min():.4f}, {alpha_map.max():.4f}]")
-			
-			# Convert image to numpy array for fast processing
-			# We need to work in float for the math
+			# Reverse Alpha Blending: original = (watermarked - α × 255) / (1 - α)
 			img_array = np.array(img.convert("RGB")).astype(np.float64)
-			
-			# Extract the region of interest
 			roi = img_array[y:y+logo_size, x:x+logo_size].copy()
-			
-			# Reverse Alpha Blending formula: original = (watermarked - alpha * logo) / (1 - alpha)
-			# logo = 255 (white watermark)
-			alpha = np.clip(alpha_map, 0.002, 0.99) # Avoid division by zero
-			alpha_expanded = np.expand_dims(alpha, axis=2) # Match RGB channels
-			
+
+			alpha = np.clip(alpha_map, 0.002, 0.99)
+			alpha_expanded = np.expand_dims(alpha, axis=2)
 			cleaned_roi = (roi - alpha_expanded * 255.0) / (1.0 - alpha_expanded)
 			cleaned_roi = np.clip(np.round(cleaned_roi), 0, 255).astype(np.uint8)
-			
-			# Log the pixel difference to verify changes are happening
-			roi_uint8 = roi.astype(np.uint8)
-			diff = np.abs(roi_uint8.astype(int) - cleaned_roi.astype(int))
-			logger.info(f"Pixel diff stats: mean={diff.mean():.2f}, max={diff.max()}, changed_pixels={np.count_nonzero(diff)}/{diff.size}")
-			
-			# Put it back
+
 			img_array_uint8 = np.array(img.convert("RGB"))
 			img_array_uint8[y:y+logo_size, x:x+logo_size] = cleaned_roi
-			
-			# Save back to bytes, preserving original format
+
 			out_io = io.BytesIO()
 			save_format = orig_format or "PNG"
 			if save_format.upper() == "JPEG":
 				Image.fromarray(img_array_uint8).save(out_io, format="JPEG", quality=95)
 			else:
 				Image.fromarray(img_array_uint8).save(out_io, format=save_format)
-			logger.info(f"Watermark removal complete, saved as {save_format}, output size={out_io.tell()} bytes")
 			return out_io.getvalue()
-			
+
 	except Exception as e:
 		logger.error(f"Error removing watermark: {e}")
 		return image_bytes
@@ -650,14 +620,8 @@ async def proxy_image(url: str, sig: str):
 
 	async with httpx.AsyncClient(http2=True, cookies=jar, follow_redirects=True) as client:
 		try:
-			# Rewrite Google CDN size parameter to fetch original resolution
-			# The watermark is applied at original resolution, so =s512 etc. would
-			# resize the image and make the watermark position/size unpredictable
-			if re.search(r"=s\d+$", url):
-				fetch_url = re.sub(r"=s\d+$", "=s0", url)
-			else:
-				fetch_url = url + "=s0"
-			logger.info(f"Fetching original resolution image: {fetch_url[-20:]}")
+			# Fetch original resolution to keep watermark at expected size/position
+			fetch_url = re.sub(r"=s\d+$", "=s0", url) if re.search(r"=s\d+$", url) else url + "=s0"
 
 			async with client.stream("GET", fetch_url, timeout=15.0, headers=headers) as resp:
 				if resp.status_code != 200:
