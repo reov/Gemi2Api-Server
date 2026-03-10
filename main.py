@@ -372,7 +372,7 @@ def extract_image_markdown(response, base_url: str) -> str:
 			if img_url:
 				sig = get_image_signature(img_url)
 				proxy_url = f"{base_url}/gemini-proxy/image?url={quote(img_url)}&sig={sig}"
-				result += f"\n\n![image]({proxy_url})"
+				result += f"\n\n![🎨 Loading image...]({proxy_url})"
 	return result
 
 
@@ -425,37 +425,51 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 
 					thinking_started = False
 					thinking_ended = False
-					last_chunk = None
+					yielded_images = 0
 
 					async for chunk in gemini_client.generate_content_stream(conversation, **gen_kwargs):
-						last_chunk = chunk
 
 						# Handle thinking/thoughts delta
 						if ENABLE_THINKING and hasattr(chunk, "thoughts_delta") and chunk.thoughts_delta:
-							thought_content = ""
 							if not thinking_started:
-								thought_content = "<think>"
+								yield make_chunk({"content": "<think>\n"})
 								thinking_started = True
-							thought_content += chunk.thoughts_delta
-							yield make_chunk({"content": thought_content})
+							
+							# Also include reasoning_content for full Open WebUI native compatibility
+							yield make_chunk({
+								"content": chunk.thoughts_delta,
+								"reasoning_content": chunk.thoughts_delta
+							})
 
 						# Handle text delta
 						if hasattr(chunk, "text_delta") and chunk.text_delta:
 							# Close thinking tag before first text content
 							if thinking_started and not thinking_ended:
 								thinking_ended = True
-								yield make_chunk({"content": "</think>"})
+								yield make_chunk({"content": "\n</think>\n\n"})
+							
 							yield make_chunk({"content": chunk.text_delta})
 
-					# Close thinking tag if it was never closed (no text followed)
-					if thinking_started and not thinking_ended:
-						yield make_chunk({"content": "</think>"})
+						# Handle inline images as they arrive
+						if hasattr(chunk, "images") and chunk.images and len(chunk.images) > yielded_images:
+							# Close thinking tag if an image arrives before any text
+							if thinking_started and not thinking_ended:
+								thinking_ended = True
+								yield make_chunk({"content": "\n</think>\n\n"})
 
-					# Append images from the final chunk (if any)
-					if last_chunk:
-						image_md = extract_image_markdown(last_chunk, base_url)
-						if image_md:
-							yield make_chunk({"content": image_md})
+							new_images = chunk.images[yielded_images:]
+							for img in new_images:
+								img_url = getattr(img, "url", None)
+								if img_url:
+									sig = get_image_signature(img_url)
+									proxy_url = f"{base_url}/gemini-proxy/image?url={quote(img_url)}&sig={sig}"
+									img_md = f"\n\n![🎨 Loading image...]({proxy_url})\n\n"
+									yield make_chunk({"content": img_md})
+							yielded_images = len(chunk.images)
+
+					# Close thinking tag if it was never closed
+					if thinking_started and not thinking_ended:
+						yield make_chunk({"content": "\n</think>\n\n"})
 
 					# Send finish chunk
 					yield make_chunk({}, finish_reason="stop")
