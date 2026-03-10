@@ -650,7 +650,14 @@ async def proxy_image(url: str, sig: str):
 
 	async with httpx.AsyncClient(http2=True, cookies=jar, follow_redirects=True) as client:
 		try:
-			async with client.stream("GET", url, timeout=15.0, headers=headers) as resp:
+			# Rewrite Google CDN size parameter to fetch original resolution
+			# The watermark is applied at original resolution, so =s512 etc. would
+			# resize the image and make the watermark position/size unpredictable
+			fetch_url = re.sub(r"=s\d+$", "=s0", url)
+			if fetch_url != url:
+				logger.info(f"Rewrote image URL for original resolution: {url.split('=')[-1]} -> s0")
+
+			async with client.stream("GET", fetch_url, timeout=15.0, headers=headers) as resp:
 				if resp.status_code != 200:
 					logger.error(f"Google returned {resp.status_code} for image: {url}")
 				
