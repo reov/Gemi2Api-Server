@@ -50,6 +50,7 @@ SECURE_1PSID = os.environ.get("SECURE_1PSID", "")
 SECURE_1PSIDTS = os.environ.get("SECURE_1PSIDTS", "")
 API_KEY = os.environ.get("API_KEY", "")
 ENABLE_THINKING = os.environ.get("ENABLE_THINKING", "false").lower() == "true"
+TEMPORARY_CHAT = os.environ.get("TEMPORARY_CHAT", "true").lower() == "true"
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 SECRET_FILE_PATH = os.path.join(os.path.dirname(__file__), "secrets", "proxy_secret")
 
@@ -479,6 +480,8 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 
 		# Prepare generate_content arguments
 		gen_kwargs = {"model": model}
+		if TEMPORARY_CHAT:
+			gen_kwargs["temporary"] = True
 		if temp_files:
 			gen_kwargs["files"] = temp_files
 

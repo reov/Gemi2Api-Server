@@ -20,6 +20,7 @@
 SECURE_1PSID = "COOKIE VALUE HERE"
 SECURE_1PSIDTS = "COOKIE VALUE HERE"
 API_KEY= "API_KEY VALUE HERE"
+TEMPORARY_CHAT = "true" # 使用临时聊天（不在Web端保留历史记录，默认开启）
 PUBLIC_BASE_URL = "https://your-domain.com" # 外部URL，用于生成图片代理链接，不填则会使用内部地址。使用反向代理时必填，否则可能导致图片无法访问。
 ```
 1. `uv` 安装一下依赖
