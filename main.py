@@ -1,7 +1,7 @@
 import asyncio
 import base64
-import hmac
 import hashlib
+import hmac
 import io
 import json
 import logging
@@ -13,17 +13,16 @@ import time
 import uuid
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Union
-
 from urllib.parse import quote, urlparse
 
 import httpx
 import numpy as np
-from PIL import Image
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from gemini_webapi import GeminiClient, set_log_level
 from gemini_webapi.constants import Model
+from PIL import Image
 from pydantic import BaseModel
 
 # Configure logging
