@@ -51,7 +51,7 @@ SECURE_1PSIDTS = os.environ.get("SECURE_1PSIDTS", "")
 API_KEY = os.environ.get("API_KEY", "")
 ENABLE_THINKING = os.environ.get("ENABLE_THINKING", "false").lower() == "true"
 TEMPORARY_CHAT = os.environ.get("TEMPORARY_CHAT", "false").lower() == "true"
-AUTO_DELETE_CHAT = os.environ.get("AUTO_DELETE_CHAT", "true").lower() == "true"
+AUTO_DELETE_CHAT = os.environ.get("AUTO_DELETE_CHAT", "true").lower() == "true" and not TEMPORARY_CHAT
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 SECRET_FILE_PATH = os.path.join(os.path.dirname(__file__), "secrets", "proxy_secret")
 
