@@ -50,9 +50,21 @@ SECURE_1PSID = os.environ.get("SECURE_1PSID", "")
 SECURE_1PSIDTS = os.environ.get("SECURE_1PSIDTS", "")
 API_KEY = os.environ.get("API_KEY", "")
 ENABLE_THINKING = os.environ.get("ENABLE_THINKING", "false").lower() == "true"
-TEMPORARY_CHAT = os.environ.get("TEMPORARY_CHAT", "true").lower() == "true"
+TEMPORARY_CHAT = os.environ.get("TEMPORARY_CHAT", "false").lower() == "true"
+AUTO_DELETE_CHAT = os.environ.get("AUTO_DELETE_CHAT", "true").lower() == "true"
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 SECRET_FILE_PATH = os.path.join(os.path.dirname(__file__), "secrets", "proxy_secret")
+
+async def background_delete_chat(client: GeminiClient, cid: str):
+	"""Deletes a chat conversation in the background to avoid blocking the main thread."""
+	if not cid:
+		return
+	try:
+		logger.info(f"Auto-deleting chat {cid} in background...")
+		await client.delete_chat(cid)
+		logger.info(f"Successfully auto-deleted chat {cid}")
+	except Exception as e:
+		logger.error(f"Failed to auto-delete chat {cid}: {e}")
 
 
 def load_or_generate_secret() -> str:
@@ -507,8 +519,12 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 					thinking_ended = False
 					yielded_images = 0
 					text_buffer = ""
+					captured_cid = None
 
 					async for chunk in gemini_client.generate_content_stream(conversation, **gen_kwargs):
+						# Capture conversation ID for auto-deletion
+						if AUTO_DELETE_CHAT and captured_cid is None and hasattr(chunk, "metadata") and chunk.metadata and len(chunk.metadata) > 0:
+							captured_cid = chunk.metadata[0]
 
 						# Handle thinking/thoughts delta
 						if ENABLE_THINKING and hasattr(chunk, "thoughts_delta") and chunk.thoughts_delta:
@@ -580,6 +596,10 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 					yield make_chunk({}, finish_reason="stop")
 					yield "data: [DONE]\n\n"
 				finally:
+					# Create background task to delete the chat if AUTO_DELETE_CHAT is enabled
+					if AUTO_DELETE_CHAT and captured_cid:
+						asyncio.create_task(background_delete_chat(gemini_client, captured_cid))
+
 					# 清理临时文件
 					for temp_file in temp_files:
 						try:
@@ -593,6 +613,11 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 			logger.info("Sending request to Gemini...")
 			try:
 				response = await gemini_client.generate_content(conversation, **gen_kwargs)
+				
+				if AUTO_DELETE_CHAT and hasattr(response, "metadata") and response.metadata and len(response.metadata) > 0:
+					cid = response.metadata[0]
+					asyncio.create_task(background_delete_chat(gemini_client, cid))
+
 			finally:
 				# 清理临时文件
 				for temp_file in temp_files:

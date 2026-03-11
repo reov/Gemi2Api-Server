@@ -16,14 +16,14 @@ dependencies = [
     "numpy>=1.26.0",
 ]
 
+# 默认使用清华源，如果无法安装请取消pypi源的注释
+#[[tool.uv.index]]
+#name = "pypi"
+#url = "https://pypi.org/simple"
+
 [[tool.uv.index]]
 name = "tuna"
 url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
-
-[[tool.uv.index]]
-name = "pypi"
-url = "https://pypi.org/simple"
-default = true
 
 [dependency-groups]
 dev = [
