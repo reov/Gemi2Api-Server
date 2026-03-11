@@ -54,10 +54,11 @@ TEMPORARY_CHAT = os.environ.get("TEMPORARY_CHAT", "false").lower() == "true"
 AUTO_DELETE_CHAT = os.environ.get("AUTO_DELETE_CHAT", "true").lower() == "true" and not TEMPORARY_CHAT
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 SECRET_FILE_PATH = os.path.join(os.path.dirname(__file__), "secrets", "proxy_secret")
-COOKIE_FILE_PATH = os.path.join(os.path.dirname(__file__), "secrets", "cookies.json")
+COOKIE_DIR_PATH = os.path.join(os.path.dirname(__file__), "secrets")
+COOKIE_FILE_PATH = os.path.join(COOKIE_DIR_PATH, "cookies.json")
 
 # Implicitly configure gemini-webapi to persist auto-refreshed cookies
-os.environ["GEMINI_COOKIE_PATH"] = COOKIE_FILE_PATH
+os.environ["GEMINI_COOKIE_PATH"] = COOKIE_DIR_PATH
 
 async def background_delete_chat(client: GeminiClient, cid: str):
 	"""Deletes a chat conversation in the background to avoid blocking the main thread."""
