@@ -12,6 +12,7 @@ import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, List, Optional, Union
 from urllib.parse import quote, urlparse
 
@@ -53,6 +54,10 @@ TEMPORARY_CHAT = os.environ.get("TEMPORARY_CHAT", "false").lower() == "true"
 AUTO_DELETE_CHAT = os.environ.get("AUTO_DELETE_CHAT", "true").lower() == "true" and not TEMPORARY_CHAT
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 SECRET_FILE_PATH = os.path.join(os.path.dirname(__file__), "secrets", "proxy_secret")
+COOKIE_FILE_PATH = os.path.join(os.path.dirname(__file__), "secrets", "cookies.json")
+
+# Implicitly configure gemini-webapi to persist auto-refreshed cookies
+os.environ["GEMINI_COOKIE_PATH"] = COOKIE_FILE_PATH
 
 async def background_delete_chat(client: GeminiClient, cid: str):
 	"""Deletes a chat conversation in the background to avoid blocking the main thread."""
@@ -641,7 +646,7 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 			logger.info("Sending request to Gemini...")
 			try:
 				response = await gemini_client.generate_content(conversation, **gen_kwargs)
-				
+
 				if AUTO_DELETE_CHAT and hasattr(response, "metadata") and response.metadata and len(response.metadata) > 0:
 					cid = response.metadata[0]
 					asyncio.create_task(background_delete_chat(gemini_client, cid))
@@ -743,10 +748,37 @@ async def proxy_image(url: str, sig: str):
 
 	# Use scoped cookies to prevent leakage during redirects
 	jar = httpx.Cookies()
-	jar.set("__Secure-1PSID", SECURE_1PSID, domain=".google.com")
-	jar.set("__Secure-1PSIDTS", SECURE_1PSIDTS, domain=".google.com")
-	jar.set("__Secure-1PSID", SECURE_1PSID, domain=".googleusercontent.com")
-	jar.set("__Secure-1PSIDTS", SECURE_1PSIDTS, domain=".googleusercontent.com")
+
+	# Fetch the freshest cookies (either from the saved JSON or fallback to env vars)
+	psid = SECURE_1PSID
+	psidts = SECURE_1PSIDTS
+
+	if os.path.exists(COOKIE_FILE_PATH):
+		try:
+			content = Path(COOKIE_FILE_PATH).read_text().strip()
+			if content:
+				try:
+					data = json.loads(content)
+				except json.JSONDecodeError as e:
+					logger.warning(f"Invalid JSON in {COOKIE_FILE_PATH}: {e}")
+				else:
+					# Normalize: handle dict or list uniformly
+					items = data if isinstance(data, list) else [data]
+					for item in items:
+						if not isinstance(item, dict):
+							continue
+						name = item.get("name")
+						if name == "__Secure-1PSID":
+							psid = item.get("value", psid)
+						elif name == "__Secure-1PSIDTS":
+							psidts = item.get("value", psidts)
+		except Exception as e:
+			logger.warning(f"Error reading proxy cookies from {COOKIE_FILE_PATH}: {e}")
+
+	jar.set("__Secure-1PSID", psid, domain=".google.com")
+	jar.set("__Secure-1PSIDTS", psidts, domain=".google.com")
+	jar.set("__Secure-1PSID", psid, domain=".googleusercontent.com")
+	jar.set("__Secure-1PSIDTS", psidts, domain=".googleusercontent.com")
 
 	async with httpx.AsyncClient(http2=True, cookies=jar, follow_redirects=True) as client:
 		try:
