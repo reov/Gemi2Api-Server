@@ -50,8 +50,21 @@ SECURE_1PSID = os.environ.get("SECURE_1PSID", "")
 SECURE_1PSIDTS = os.environ.get("SECURE_1PSIDTS", "")
 API_KEY = os.environ.get("API_KEY", "")
 ENABLE_THINKING = os.environ.get("ENABLE_THINKING", "false").lower() == "true"
+TEMPORARY_CHAT = os.environ.get("TEMPORARY_CHAT", "false").lower() == "true"
+AUTO_DELETE_CHAT = os.environ.get("AUTO_DELETE_CHAT", "true").lower() == "true" and not TEMPORARY_CHAT
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 SECRET_FILE_PATH = os.path.join(os.path.dirname(__file__), "secrets", "proxy_secret")
+
+async def background_delete_chat(client: GeminiClient, cid: str):
+	"""Deletes a chat conversation in the background to avoid blocking the main thread."""
+	if not cid:
+		return
+	try:
+		logger.info(f"Auto-deleting chat {cid} in background...")
+		await client.delete_chat(cid)
+		logger.info(f"Successfully auto-deleted chat {cid}")
+	except Exception as e:
+		logger.error(f"Failed to auto-delete chat {cid}: {e}")
 
 
 def load_or_generate_secret() -> str:
@@ -279,6 +292,12 @@ class ModelList(BaseModel):
 
 # Authentication dependency
 async def verify_api_key(authorization: str = Header(None)):
+	"""
+	Verify the API key extracted from the Authorization header.
+	
+	Raises:
+		HTTPException: If the authorization header is missing, incorrectly formatted, or the token is invalid.
+	"""
 	if not API_KEY:
 		# If API_KEY is not set in environment, skip validation (for development)
 		logger.warning("API key validation skipped - no API_KEY set in environment")
@@ -303,6 +322,10 @@ async def verify_api_key(authorization: str = Header(None)):
 # Simple error handler middleware
 @app.middleware("http")
 async def error_handling(request: Request, call_next):
+	"""
+	Global middleware to catch unhandled exceptions, log the error, 
+	and return a standardized HTTP 500 response.
+	"""
 	try:
 		return await call_next(request)
 	except Exception as e:
@@ -364,6 +387,14 @@ def map_model_name(openai_model_name: str) -> Model:
 
 # Prepare conversation history from OpenAI messages format
 def prepare_conversation(messages: List[Message]) -> tuple:
+	"""
+	Convert a list of OpenAI-formatted message objects into a 
+	flat string conversation format suitable for the Gemini API.
+	Also extracts and saves base64 images to temporary files.
+	
+	Returns:
+		A tuple containing the constructed conversation string and a list of paths to temporary image files.
+	"""
 	conversation = ""
 	temp_files = []
 
@@ -415,6 +446,12 @@ def prepare_conversation(messages: List[Message]) -> tuple:
 
 # Dependency to get the initialized Gemini client
 async def get_gemini_client():
+	"""
+	Get or initialize the global GeminiClient instance.
+	
+	Raises:
+		HTTPException: If initialization fails due to invalid parameters or connection issues.
+	"""
 	global gemini_client
 	if gemini_client is None:
 		try:
@@ -455,6 +492,11 @@ def extract_image_markdown(response, base_url: str) -> str:
 
 @app.post("/v1/chat/completions")
 async def create_chat_completion(request: ChatCompletionRequest, raw_request: Request, api_key: str = Depends(verify_api_key)):
+	"""
+	Handle chat completion requests, translating from OpenAI API format to Gemini API format.
+	Supports both streaming and non-streaming responses, caching, thinking features, 
+	and background conversation cleanup based on configuration.
+	"""
 	try:
 		# 确保客户端已初始化
 		global gemini_client
@@ -479,6 +521,8 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 
 		# Prepare generate_content arguments
 		gen_kwargs = {"model": model}
+		if TEMPORARY_CHAT:
+			gen_kwargs["temporary"] = True
 		if temp_files:
 			gen_kwargs["files"] = temp_files
 
@@ -504,8 +548,12 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 					thinking_ended = False
 					yielded_images = 0
 					text_buffer = ""
+					captured_cid = None
 
 					async for chunk in gemini_client.generate_content_stream(conversation, **gen_kwargs):
+						# Capture conversation ID for auto-deletion
+						if AUTO_DELETE_CHAT and captured_cid is None and hasattr(chunk, "metadata") and chunk.metadata and len(chunk.metadata) > 0:
+							captured_cid = chunk.metadata[0]
 
 						# Handle thinking/thoughts delta
 						if ENABLE_THINKING and hasattr(chunk, "thoughts_delta") and chunk.thoughts_delta:
@@ -577,6 +625,10 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 					yield make_chunk({}, finish_reason="stop")
 					yield "data: [DONE]\n\n"
 				finally:
+					# Create background task to delete the chat if AUTO_DELETE_CHAT is enabled
+					if AUTO_DELETE_CHAT and captured_cid:
+						asyncio.create_task(background_delete_chat(gemini_client, captured_cid))
+
 					# 清理临时文件
 					for temp_file in temp_files:
 						try:
@@ -590,6 +642,11 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 			logger.info("Sending request to Gemini...")
 			try:
 				response = await gemini_client.generate_content(conversation, **gen_kwargs)
+				
+				if AUTO_DELETE_CHAT and hasattr(response, "metadata") and response.metadata and len(response.metadata) > 0:
+					cid = response.metadata[0]
+					asyncio.create_task(background_delete_chat(gemini_client, cid))
+
 			finally:
 				# 清理临时文件
 				for temp_file in temp_files:
@@ -746,6 +803,9 @@ async def proxy_image(url: str, sig: str):
 
 @app.get("/")
 async def root():
+	"""
+	Health check endpoint to verify the API server is currently running.
+	"""
 	return {"status": "online", "message": "Gemini API FastAPI Server is running"}
 
 
