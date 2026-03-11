@@ -88,13 +88,13 @@ def load_or_generate_secret() -> str:
 		os.makedirs(os.path.dirname(SECRET_FILE_PATH), exist_ok=True)
 		with open(SECRET_FILE_PATH, "w") as f:
 			f.write(new_secret)
-		
+
 		# Set restrictive permissions (user-only readable/writable)
 		try:
 			os.chmod(SECRET_FILE_PATH, 0o600)
 		except Exception as e:
 			logger.warning(f"Failed to set restrictive permissions on {SECRET_FILE_PATH}: {e}")
-			
+
 		logger.info(f"Generated new proxy secret and saved to {SECRET_FILE_PATH}")
 		return new_secret
 	except Exception as e:
@@ -294,7 +294,7 @@ class ModelList(BaseModel):
 async def verify_api_key(authorization: str = Header(None)):
 	"""
 	Verify the API key extracted from the Authorization header.
-	
+
 	Raises:
 		HTTPException: If the authorization header is missing, incorrectly formatted, or the token is invalid.
 	"""
@@ -391,7 +391,7 @@ def prepare_conversation(messages: List[Message]) -> tuple:
 	Convert a list of OpenAI-formatted message objects into a 
 	flat string conversation format suitable for the Gemini API.
 	Also extracts and saves base64 images to temporary files.
-	
+
 	Returns:
 		A tuple containing the constructed conversation string and a list of paths to temporary image files.
 	"""
@@ -448,7 +448,7 @@ def prepare_conversation(messages: List[Message]) -> tuple:
 async def get_gemini_client():
 	"""
 	Get or initialize the global GeminiClient instance.
-	
+
 	Raises:
 		HTTPException: If initialization fails due to invalid parameters or connection issues.
 	"""
@@ -560,7 +560,7 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 							if not thinking_started:
 								yield make_chunk({"content": "<think>\n"})
 								thinking_started = True
-							
+
 							# Also include reasoning_content for full Open WebUI native compatibility
 							yield make_chunk({
 								"content": chunk.thoughts_delta,
@@ -573,16 +573,16 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 							if thinking_started and not thinking_ended:
 								thinking_ended = True
 								yield make_chunk({"content": "\n</think>\n\n"})
-							
+
 							text_buffer += chunk.text_delta
 							safe_to_yield = False
-							
+
 							# Yield if buffer ends with whitespace and looks like it's outside a markdown link
 							if text_buffer[-1].isspace() and text_buffer.count('[') == text_buffer.count(']') and text_buffer.count('(') == text_buffer.count(')'):
 								safe_to_yield = True
 							elif len(text_buffer) > 500:
 								safe_to_yield = True
-							
+
 							if safe_to_yield:
 								yield make_chunk({"content": postprocess_text(text_buffer)})
 								text_buffer = ""
@@ -709,21 +709,21 @@ async def proxy_image(url: str, sig: str):
 
 	# Prevent open proxying
 	allowed_domains = ["google.com", "googleusercontent.com", "gstatic.com"]
-	
+
 	try:
 		parsed = urlparse(url)
 		if parsed.scheme not in ["http", "https"]:
 			logger.warning(f"Invalid scheme in proxy request: {parsed.scheme}")
 			raise HTTPException(status_code=400, detail="Invalid URL scheme")
-		
+
 		hostname = parsed.hostname
 		if not hostname:
 			logger.warning(f"No hostname in proxy request: {url}")
 			raise HTTPException(status_code=400, detail="Invalid URL")
-		
+
 		hostname = hostname.lower()
 		is_allowed = any(hostname == d or hostname.endswith("." + d) for d in allowed_domains)
-		
+
 		if not is_allowed:
 			logger.warning(f"Blocked proxy request for domain: {hostname}")
 			raise HTTPException(status_code=403, detail="Domain not allowed")
@@ -757,7 +757,7 @@ async def proxy_image(url: str, sig: str):
 			async with client.stream("GET", fetch_url, timeout=15.0, headers=headers) as resp:
 				if resp.status_code != 200:
 					logger.error(f"Google returned {resp.status_code} for image: {url}")
-				
+
 				resp.raise_for_status()
 
 				content = bytearray()
