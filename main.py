@@ -55,7 +55,6 @@ AUTO_DELETE_CHAT = os.environ.get("AUTO_DELETE_CHAT", "true").lower() == "true" 
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 SECRET_FILE_PATH = os.path.join(os.path.dirname(__file__), "secrets", "proxy_secret")
 COOKIE_DIR_PATH = os.path.join(os.path.dirname(__file__), "secrets")
-COOKIE_FILE_PATH = os.path.join(COOKIE_DIR_PATH, "cookies.json")
 
 # Implicitly configure gemini-webapi to persist auto-refreshed cookies
 os.environ["GEMINI_COOKIE_PATH"] = COOKIE_DIR_PATH
@@ -754,27 +753,17 @@ async def proxy_image(url: str, sig: str):
 	psid = SECURE_1PSID
 	psidts = SECURE_1PSIDTS
 
-	if os.path.exists(COOKIE_FILE_PATH):
+	# Formulate the expected filename for the cached 1PSIDTS
+	cached_file_path = os.path.join(COOKIE_DIR_PATH, f".cached_1psidts_{psid}.txt")
+	
+	if os.path.exists(cached_file_path):
 		try:
-			content = Path(COOKIE_FILE_PATH).read_text().strip()
+			# The file only contains the raw __Secure-1PSIDTS string
+			content = Path(cached_file_path).read_text().strip()
 			if content:
-				try:
-					data = json.loads(content)
-				except json.JSONDecodeError as e:
-					logger.warning(f"Invalid JSON in {COOKIE_FILE_PATH}: {e}")
-				else:
-					# Normalize: handle dict or list uniformly
-					items = data if isinstance(data, list) else [data]
-					for item in items:
-						if not isinstance(item, dict):
-							continue
-						name = item.get("name")
-						if name == "__Secure-1PSID":
-							psid = item.get("value", psid)
-						elif name == "__Secure-1PSIDTS":
-							psidts = item.get("value", psidts)
+				psidts = content
 		except Exception as e:
-			logger.warning(f"Error reading proxy cookies from {COOKIE_FILE_PATH}: {e}")
+			logger.warning(f"Error reading fresh proxy cookies from {cached_file_path}: {e}")
 
 	jar.set("__Secure-1PSID", psid, domain=".google.com")
 	jar.set("__Secure-1PSIDTS", psidts, domain=".google.com")
