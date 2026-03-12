@@ -454,7 +454,7 @@ def get_1psidts_value(psid: str, psidts_env: str) -> str:
 	If the provided psidts_env matches the historically consumed value, or is empty,
 	it falls back to reading the cached value from the cache directory.
 	"""
-	marker_path = os.path.join(os.path.dirname(__file__), ".1psidts_consumed")
+	marker_path = os.path.join(COOKIE_DIR_PATH, f".1psidts_consumed_{psid or 'unknown'}")
 
 	if psidts_env:
 		consumed_val = ""
@@ -471,7 +471,7 @@ def get_1psidts_value(psid: str, psidts_env: str) -> str:
 		logger.warning("SECURE_1PSID is empty. Cannot load cached 1PSIDTS.")
 		return ""
 
-	if not re.match(r'^[\w\-\.]+$', psid):
+	if not re.match("^[\\w\\-\\.]+$", psid):
 		logger.warning("SECURE_1PSID contains invalid characters for a safe filename.")
 		return ""
 
@@ -501,11 +501,13 @@ async def get_gemini_client():
 			psid = SECURE_1PSID
 			psidts = get_1psidts_value(psid, SECURE_1PSIDTS)
 
-			gemini_client = GeminiClient(psid, psidts)
-			await gemini_client.init(timeout=300)
+			tmp_client = GeminiClient(psid, psidts)
+			await tmp_client.init(timeout=300)
+
+			gemini_client = tmp_client
 
 			if SECURE_1PSIDTS:
-				marker_path = os.path.join(os.path.dirname(__file__), ".1psidts_consumed")
+				marker_path = os.path.join(COOKIE_DIR_PATH, f".1psidts_consumed_{psid or 'unknown'}")
 				try:
 					current_val = Path(marker_path).read_text().strip() if os.path.exists(marker_path) else None
 					if current_val != SECURE_1PSIDTS:
