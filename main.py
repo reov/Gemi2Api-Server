@@ -43,13 +43,6 @@ def get_gemini_webapi_version() -> str:
 		return "unknown"
 
 
-def summarize_cookie_value(value: str) -> str:
-	"""Return a short, non-sensitive summary of a cookie value for logs."""
-	if not value:
-		return "empty"
-	return f"len={len(value)} prefix={value[:8]}..."
-
-
 def get_cached_1psidts_path(psid: str) -> str:
 	"""Return the cache path for a rotated 1PSIDTS value."""
 	if not psid or not re.match("^[\\w\\-\\.]+$", psid):
@@ -85,7 +78,7 @@ def save_cached_1psidts(psid: str, psidts: str):
 		current_val = Path(cached_file_path).read_text().strip() if os.path.exists(cached_file_path) else None
 		if current_val != psidts:
 			Path(cached_file_path).write_text(psidts)
-			logger.info("Persisted rotated 1PSIDTS to %s", cached_file_path)
+			logger.debug("Persisted rotated 1PSIDTS to %s", cached_file_path)
 			try:
 				os.chmod(cached_file_path, 0o600)
 			except Exception:
@@ -147,9 +140,7 @@ async def background_delete_chat(client: GeminiClient, cid: str):
 	if not cid:
 		return
 	try:
-		logger.info(f"Auto-deleting chat {cid} in background...")
 		await client.delete_chat(cid)
-		logger.info(f"Successfully auto-deleted chat {cid}")
 	except Exception as e:
 		logger.error(f"Failed to auto-delete chat {cid}: {e}")
 
@@ -167,7 +158,7 @@ async def background_verify_chat_persistence(client: GeminiClient, cid: str, sou
 
 			recovered = await client.fetch_latest_chat_response(cid)
 			if recovered and getattr(recovered, "text", ""):
-				logger.info(
+				logger.debug(
 					"Gemini history verification succeeded: source=%s cid=%s attempt=%s/%s text_len=%s metadata=%s",
 					source,
 					cid,
@@ -178,7 +169,7 @@ async def background_verify_chat_persistence(client: GeminiClient, cid: str, sou
 				)
 				return
 
-			logger.warning(
+			logger.debug(
 				"Gemini history verification returned no readable content: source=%s cid=%s attempt=%s/%s",
 				source,
 				cid,
@@ -186,7 +177,7 @@ async def background_verify_chat_persistence(client: GeminiClient, cid: str, sou
 				len(retry_delays),
 			)
 		except Exception as e:
-			logger.warning(
+			logger.debug(
 				"Gemini history verification failed: source=%s cid=%s attempt=%s/%s error=%s",
 				source,
 				cid,
@@ -310,36 +301,24 @@ def remove_gemini_watermark(image_bytes: bytes) -> bytes:
 		logger.error(f"Error removing watermark: {e}")
 		return image_bytes
 
-
-# Print debug info at startup
 if not SECURE_1PSID or not SECURE_1PSIDTS:
-	logger.warning("⚠️ Gemini API credentials are not set or empty! Please check your environment variables.")
-	logger.warning("Make sure SECURE_1PSID and SECURE_1PSIDTS are correctly set in your .env file or environment.")
-	logger.warning("If using Docker, ensure the .env file is correctly mounted and formatted.")
-	logger.warning("Example format in .env file (no quotes):")
-	logger.warning("SECURE_1PSID=your_secure_1psid_value_here")
-	logger.warning("SECURE_1PSIDTS=your_secure_1psidts_value_here")
+	logger.warning("Gemini credentials are missing; set SECURE_1PSID and SECURE_1PSIDTS before serving requests.")
 else:
-	# Only log the first few characters for security
-	logger.info(f"Credentials found. SECURE_1PSID starts with: {SECURE_1PSID[:5]}...")
-	logger.info(f"Credentials found. SECURE_1PSIDTS starts with: {SECURE_1PSIDTS[:5]}...")
 	logger.info(
-		"Startup config: thinking=%s temporary_chat=%s auto_delete_chat=%s public_base_url=%s cookie_dir=%s gemini_webapi=%s",
+		"Startup config: thinking=%s temporary_chat=%s auto_delete_chat=%s public_base_url=%s gemini_webapi=%s",
 		ENABLE_THINKING,
 		TEMPORARY_CHAT,
 		AUTO_DELETE_CHAT,
 		bool(PUBLIC_BASE_URL),
-		COOKIE_DIR_PATH,
 		get_gemini_webapi_version(),
 	)
 	if not re.match("^[\\w\\-\\.]+$", SECURE_1PSID):
 		logger.warning("SECURE_1PSID contains characters outside the safe cache filename pattern. This may be valid for auth, but cached 1PSIDTS lookup will fall back to the env value.")
 
 if not API_KEY:
-	logger.warning("⚠️ API_KEY is not set or empty! API authentication will not work.")
-	logger.warning("Make sure API_KEY is correctly set in your .env file or environment.")
+	logger.info("API key authentication is disabled.")
 else:
-	logger.info(f"API_KEY found. API_KEY starts with: {API_KEY[:5]}...")
+	logger.info("API key authentication is enabled.")
 
 
 def correct_markdown(md_text: str) -> str:
@@ -442,7 +421,6 @@ async def verify_api_key(authorization: str = Header(None)):
 	"""
 	if not API_KEY:
 		# If API_KEY is not set in environment, skip validation (for development)
-		logger.warning("API key validation skipped - no API_KEY set in environment")
 		return
 
 	if not authorization:
@@ -489,16 +467,13 @@ async def list_models():
 		}
 		for m in Model
 	]
-	print(data)
 	return {"object": "list", "data": data}
 
 
 # Helper to convert between Gemini and OpenAI model names
 def map_model_name(openai_model_name: str) -> Model:
 	"""根据模型名称字符串查找匹配的 Model 枚举值"""
-	# 打印所有可用模型以便调试
-	all_models = [m.model_name if hasattr(m, "model_name") else str(m) for m in Model]
-	logger.info(f"Available models: {all_models}")
+	# all_models = [m.model_name if hasattr(m, "model_name") else str(m) for m in Model]
 
 	# 首先尝试直接查找匹配的模型名称
 	for m in Model:
@@ -612,21 +587,11 @@ async def get_gemini_client():
 			last_error = None
 			for source, psidts in attempts:
 				try:
-					logger.info(
-						"Initializing GeminiClient with cookie summary: source=%s psid=%s psidts=%s",
-						source,
-						summarize_cookie_value(psid),
-						summarize_cookie_value(psidts),
-					)
+					logger.info("Initializing Gemini client using %s credentials", source)
 
 					tmp_client = GeminiClient(psid, psidts)
 					await tmp_client.init(timeout=300)
-					logger.info(
-						"Gemini runtime fingerprint: gemini-webapi=%s build_label=%s session_id=%s",
-						get_gemini_webapi_version(),
-						getattr(tmp_client, "build_label", None),
-						getattr(tmp_client, "session_id", None),
-					)
+					logger.info("Gemini client initialized successfully")
 
 					persist_runtime_cookies(psid, tmp_client)
 					gemini_client = tmp_client
@@ -682,26 +647,19 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 		# 确保客户端已初始化
 		global gemini_client
 		gemini_client = await get_gemini_client()
-		logger.info("Gemini client is ready")
 
 		# 转换消息为对话格式
 		conversation, temp_files = prepare_conversation(request.messages)
-		logger.info(f"Prepared conversation: {conversation}")
-		logger.info(f"Temp files: {temp_files}")
 		logger.info(
-			"Chat completion request summary: stream=%s requested_model=%s resolved_messages=%s temp_files=%s thinking=%s temporary_chat=%s auto_delete_chat=%s",
+			"Chat completion request: stream=%s requested_model=%s messages=%s temp_files=%s",
 			request.stream,
 			request.model,
 			len(request.messages),
 			len(temp_files),
-			ENABLE_THINKING,
-			TEMPORARY_CHAT,
-			AUTO_DELETE_CHAT,
 		)
 
 		# 获取适当的模型
 		model = map_model_name(request.model)
-		logger.info(f"Using model: {model}")
 
 		# 创建响应对象
 		completion_id = f"chatcmpl-{uuid.uuid4()}"
@@ -714,19 +672,11 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 			gen_kwargs["temporary"] = True
 		if temp_files:
 			gen_kwargs["files"] = temp_files
-		logger.info(
-			"Gemini request args: temporary=%s files=%s base_url=%s",
-			gen_kwargs.get("temporary", False),
-			len(gen_kwargs.get("files", [])),
-			base_url,
-		)
 
 		if request.stream:
 			# Real streaming using upstream generate_content_stream
 			async def generate_stream():
 				try:
-					logger.info("Starting streaming response from Gemini...")
-
 					def make_chunk(delta: dict, finish_reason=None):
 						return "data: " + json.dumps({
 							"id": completion_id,
@@ -751,11 +701,9 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 						chunk_count += 1
 						if hasattr(chunk, "metadata") and chunk.metadata:
 							last_metadata = chunk.metadata
-							logger.info("Streaming chunk metadata[%s]: %s", chunk_count, chunk.metadata)
 						# Capture conversation ID for auto-deletion
 						if AUTO_DELETE_CHAT and captured_cid is None and hasattr(chunk, "metadata") and chunk.metadata and len(chunk.metadata) > 0:
 							captured_cid = chunk.metadata[0]
-							logger.info("Captured streaming cid for auto-delete: %s", captured_cid)
 
 						# Handle thinking/thoughts delta
 						if ENABLE_THINKING and hasattr(chunk, "thoughts_delta") and chunk.thoughts_delta:
@@ -818,14 +766,7 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 					yield make_chunk({}, finish_reason="stop")
 					yield "data: [DONE]\n\n"
 
-					logger.info(
-						"Streaming response completed: chunks=%s final_metadata=%s captured_cid=%s yielded_images=%s buffered_text_remaining=%s",
-						chunk_count,
-						last_metadata,
-						captured_cid,
-						yielded_images,
-						len(text_buffer),
-					)
+					logger.info("Streaming response completed: chunks=%s images=%s", chunk_count, yielded_images)
 					persist_runtime_cookies(SECURE_1PSID, gemini_client)
 					if last_metadata and len(last_metadata) > 0 and not AUTO_DELETE_CHAT:
 						asyncio.create_task(background_verify_chat_persistence(gemini_client, last_metadata[0], "stream"))
@@ -851,21 +792,12 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 			return StreamingResponse(generate_stream(), media_type="text/event-stream")
 		else:
 			# Non-streaming response
-			logger.info("Sending request to Gemini...")
 			try:
 				response = await gemini_client.generate_content(conversation, **gen_kwargs)
 				persist_runtime_cookies(SECURE_1PSID, gemini_client)
-				logger.info(
-					"Non-stream response metadata: metadata=%s rcid=%s images=%s thoughts=%s",
-					getattr(response, "metadata", None),
-					getattr(response, "rcid", None),
-					len(getattr(response, "images", []) or []),
-					bool(getattr(response, "thoughts", None)),
-				)
 
 				if AUTO_DELETE_CHAT and hasattr(response, "metadata") and response.metadata and len(response.metadata) > 0:
 					cid = response.metadata[0]
-					logger.info("Scheduling auto-delete for non-stream cid: %s", cid)
 					asyncio.create_task(background_delete_chat(gemini_client, cid))
 				elif hasattr(response, "metadata") and response.metadata and len(response.metadata) > 0:
 					asyncio.create_task(background_verify_chat_persistence(gemini_client, response.metadata[0], "non-stream"))
@@ -893,8 +825,6 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 			reply_text += extract_image_markdown(response, base_url)
 			reply_text = postprocess_text(reply_text)
 
-			logger.info(f"Response: {reply_text}")
-
 			if not reply_text or reply_text.strip() == "":
 				logger.warning("Empty response received from Gemini")
 				reply_text = "Server returned an empty response. Please check that Gemini API credentials are valid."
@@ -912,7 +842,7 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 				},
 			}
 
-			logger.info(f"Returning response: {result}")
+			logger.info("Non-streaming response completed")
 			return result
 
 	except Exception as e:
@@ -973,7 +903,6 @@ async def proxy_image(url: str, sig: str):
 	# Use the freshest available 1PSIDTS without overriding env cookies up front.
 	psid = SECURE_1PSID
 	psidts = get_cookie_value(getattr(gemini_client, "cookies", None), "__Secure-1PSIDTS") or SECURE_1PSIDTS or load_cached_1psidts(psid)
-	logger.info("Proxy image cookie summary: psid=%s psidts=%s", summarize_cookie_value(psid), summarize_cookie_value(psidts))
 
 	jar.set("__Secure-1PSID", psid, domain=".google.com")
 	jar.set("__Secure-1PSIDTS", psidts, domain=".google.com")
@@ -1007,7 +936,6 @@ async def proxy_image(url: str, sig: str):
 
 				# Process watermark removal
 				if media_type in ["image/png", "image/jpeg", "image/webp"]:
-					logger.info(f"Checking for Gemini watermark on {url}")
 					processed_content = remove_gemini_watermark(bytes(content))
 				else:
 					processed_content = bytes(content)
