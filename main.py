@@ -448,6 +448,45 @@ def prepare_conversation(messages: List[Message]) -> tuple:
 	return conversation, temp_files
 
 
+def get_1psidts_value(psid: str, psidts_env: str) -> str:
+	"""
+	Get the 1PSIDTS value. Prioritizes the environment variable if it's new (not consumed).
+	If the provided psidts_env matches the historically consumed value, or is empty,
+	it falls back to reading the cached value from the cache directory.
+	"""
+	marker_path = os.path.join(os.path.dirname(__file__), ".1psidts_consumed")
+
+	if psidts_env:
+		consumed_val = ""
+		if os.path.exists(marker_path):
+			try:
+				consumed_val = Path(marker_path).read_text().strip()
+			except Exception as e:
+				logger.warning(f"Error reading marker file {marker_path}: {e}")
+
+		if psidts_env != consumed_val:
+			return psidts_env
+
+	if not psid:
+		logger.warning("SECURE_1PSID is empty. Cannot load cached 1PSIDTS.")
+		return ""
+
+	if not re.match(r'^[\w\-\.]+$', psid):
+		logger.warning("SECURE_1PSID contains invalid characters for a safe filename.")
+		return ""
+
+	cached_file_path = os.path.join(COOKIE_DIR_PATH, f".cached_1psidts_{psid}.txt")
+	if os.path.exists(cached_file_path):
+		try:
+			content = Path(cached_file_path).read_text().strip()
+			if content:
+				return content
+		except Exception as e:
+			logger.warning(f"Error reading cache file {cached_file_path}: {e}")
+
+	return ""
+
+
 # Dependency to get the initialized Gemini client
 async def get_gemini_client():
 	"""
@@ -460,36 +499,20 @@ async def get_gemini_client():
 	if gemini_client is None:
 		try:
 			psid = SECURE_1PSID
-			psidts = SECURE_1PSIDTS
-
-			# If .env provided a new 1PSIDTS, use it. Otherwise, fallback to the cache.
-			cached_file_path = os.path.join(COOKIE_DIR_PATH, f".cached_1psidts_{psid}.txt")
-			if not psidts and os.path.exists(cached_file_path):
-				try:
-					content = Path(cached_file_path).read_text().strip()
-					if content:
-						psidts = content
-				except Exception as e:
-					logger.warning(f"Error reading {cached_file_path}: {e}")
+			psidts = get_1psidts_value(psid, SECURE_1PSIDTS)
 
 			gemini_client = GeminiClient(psid, psidts)
 			await gemini_client.init(timeout=300)
 
-			# If user provided SECURE_1PSIDTS via .env, clear it out now that we've successfully booted
-			# to prevent it from acting as a stale override on the next boot.
 			if SECURE_1PSIDTS:
-				env_path = os.path.join(os.path.dirname(__file__), ".env")
-				if os.path.exists(env_path):
-					try:
-						lines = Path(env_path).read_text().splitlines()
-						new_lines = [
-							"SECURE_1PSIDTS=" if line.startswith("SECURE_1PSIDTS=") else line
-							for line in lines
-						]
-						Path(env_path).write_text("\n".join(new_lines) + "\n")
-						logger.info("Successfully cleared SECURE_1PSIDTS from .env after initialization.")
-					except Exception as e:
-						logger.warning(f"Failed to clear SECURE_1PSIDTS from .env: {e}")
+				marker_path = os.path.join(os.path.dirname(__file__), ".1psidts_consumed")
+				try:
+					current_val = Path(marker_path).read_text().strip() if os.path.exists(marker_path) else None
+					if current_val != SECURE_1PSIDTS:
+						Path(marker_path).write_text(SECURE_1PSIDTS)
+						logger.info("Successfully marked SECURE_1PSIDTS as consumed.")
+				except Exception as e:
+					logger.warning(f"Failed to update marker file: {e}")
 
 		except Exception as e:
 			logger.error(f"Failed to initialize Gemini client: {str(e)}")
@@ -777,20 +800,9 @@ async def proxy_image(url: str, sig: str):
 	# Use scoped cookies to prevent leakage during redirects
 	jar = httpx.Cookies()
 
-	# Start with .env values
+	# Get the correct value dynamically
 	psid = SECURE_1PSID
-	psidts = SECURE_1PSIDTS
-
-	# If .env does not have a 1PSIDTS, read it from the generated cache
-	if not psidts:
-		cached_file_path = os.path.join(COOKIE_DIR_PATH, f".cached_1psidts_{psid}.txt")
-		if os.path.exists(cached_file_path):
-			try:
-				content = Path(cached_file_path).read_text().strip()
-				if content:
-					psidts = content
-			except Exception as e:
-				logger.warning(f"Error reading fresh proxy cookies from {cached_file_path}: {e}")
+	psidts = get_1psidts_value(psid, SECURE_1PSIDTS)
 
 	jar.set("__Secure-1PSID", psid, domain=".google.com")
 	jar.set("__Secure-1PSIDTS", psidts, domain=".google.com")
