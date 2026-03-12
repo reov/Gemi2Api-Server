@@ -87,6 +87,50 @@ async def background_delete_chat(client: GeminiClient, cid: str):
 		logger.error(f"Failed to auto-delete chat {cid}: {e}")
 
 
+async def background_verify_chat_persistence(client: GeminiClient, cid: str, source: str):
+	"""Best-effort verification that a returned cid is readable from Gemini history."""
+	if not cid:
+		return
+
+	retry_delays = [1, 3, 8]
+	for attempt, delay in enumerate(retry_delays, start=1):
+		try:
+			if delay:
+				await asyncio.sleep(delay)
+
+			recovered = await client.fetch_latest_chat_response(cid)
+			if recovered and getattr(recovered, "text", ""):
+				logger.info(
+					"Gemini history verification succeeded: source=%s cid=%s attempt=%s/%s text_len=%s metadata=%s",
+					source,
+					cid,
+					attempt,
+					len(retry_delays),
+					len(recovered.text),
+					getattr(recovered, "metadata", None),
+				)
+				return
+
+			logger.warning(
+				"Gemini history verification returned no readable content: source=%s cid=%s attempt=%s/%s",
+				source,
+				cid,
+				attempt,
+				len(retry_delays),
+			)
+		except Exception as e:
+			logger.warning(
+				"Gemini history verification failed: source=%s cid=%s attempt=%s/%s error=%s",
+				source,
+				cid,
+				attempt,
+				len(retry_delays),
+				e,
+			)
+
+	logger.warning("Gemini history verification exhausted retries for cid=%s source=%s", cid, source)
+
+
 def load_or_generate_secret() -> str:
 	"""
 	Load the signature secret from file, or generate a new one if not found.
@@ -783,6 +827,8 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 						yielded_images,
 						len(text_buffer),
 					)
+					if last_metadata and len(last_metadata) > 0 and not AUTO_DELETE_CHAT:
+						asyncio.create_task(background_verify_chat_persistence(gemini_client, last_metadata[0], "stream"))
 				except Exception as e:
 					logger.error(f"Error during streaming: {str(e)}", exc_info=True)
 					# Send error as a content chunk so the client sees it
@@ -820,6 +866,8 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 					cid = response.metadata[0]
 					logger.info("Scheduling auto-delete for non-stream cid: %s", cid)
 					asyncio.create_task(background_delete_chat(gemini_client, cid))
+				elif hasattr(response, "metadata") and response.metadata and len(response.metadata) > 0:
+					asyncio.create_task(background_verify_chat_persistence(gemini_client, response.metadata[0], "non-stream"))
 				elif not getattr(response, "metadata", None):
 					logger.warning("Non-stream response returned no Gemini metadata. This request may not map to a persistent Gemini chat.")
 
