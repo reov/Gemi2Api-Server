@@ -134,6 +134,14 @@ AUTO_DELETE_CHAT = os.environ.get("AUTO_DELETE_CHAT", "true").lower() == "true" 
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 SECRET_FILE_PATH = os.path.join(os.path.dirname(__file__), "secrets", "proxy_secret")
 COOKIE_DIR_PATH = os.path.join(os.path.dirname(__file__), "secrets")
+SESSION_VALIDATION_PROMPT = "Reply with exactly OK."
+AUTH_FAILURE_TEXT_PATTERNS = (
+	"are you signed in",
+	"sign in",
+	"signed in",
+	"log in",
+	"logged in",
+)
 
 async def background_delete_chat(client: GeminiClient, cid: str):
 	"""Deletes a chat conversation in the background to avoid blocking the main thread."""
@@ -145,48 +153,77 @@ async def background_delete_chat(client: GeminiClient, cid: str):
 		logger.error(f"Failed to auto-delete chat {cid}: {e}")
 
 
-async def background_verify_chat_persistence(client: GeminiClient, cid: str, source: str):
-	"""Best-effort verification that a returned cid is readable from Gemini history."""
-	if not cid:
-		return
+def response_indicates_auth_failure(text: str) -> bool:
+	"""Return True if the response text looks like a signed-out or degraded session."""
+	normalized = (text or "").strip().lower()
+	if not normalized:
+		return True
+	return any(pattern in normalized for pattern in AUTH_FAILURE_TEXT_PATTERNS)
 
-	retry_delays = [1, 3, 8]
-	for attempt, delay in enumerate(retry_delays, start=1):
+
+async def fetch_readable_chat_response(client: GeminiClient, cid: str, retry_delays: List[int]) -> Optional[object]:
+	"""Poll Gemini history until the chat becomes readable or retries are exhausted."""
+	for delay in retry_delays:
 		try:
 			if delay:
 				await asyncio.sleep(delay)
 
 			recovered = await client.fetch_latest_chat_response(cid)
 			if recovered and getattr(recovered, "text", ""):
-				logger.debug(
-					"Gemini history verification succeeded: source=%s cid=%s attempt=%s/%s text_len=%s metadata=%s",
-					source,
-					cid,
-					attempt,
-					len(retry_delays),
-					len(recovered.text),
-					getattr(recovered, "metadata", None),
-				)
-				return
+				return recovered
+		except Exception:
+			continue
 
-			logger.debug(
-				"Gemini history verification returned no readable content: source=%s cid=%s attempt=%s/%s",
-				source,
-				cid,
-				attempt,
-				len(retry_delays),
-			)
-		except Exception as e:
-			logger.debug(
-				"Gemini history verification failed: source=%s cid=%s attempt=%s/%s error=%s",
-				source,
-				cid,
-				attempt,
-				len(retry_delays),
-				e,
-			)
+	return None
+
+
+async def background_verify_chat_persistence(client: GeminiClient, cid: str, source: str):
+	"""Best-effort verification that a returned cid is readable from Gemini history."""
+	if not cid:
+		return
+
+	retry_delays = [1, 3, 8]
+	recovered = await fetch_readable_chat_response(client, cid, retry_delays)
+	if recovered:
+		logger.debug(
+			"Gemini history verification succeeded: source=%s cid=%s text_len=%s metadata=%s",
+			source,
+			cid,
+			len(recovered.text),
+			getattr(recovered, "metadata", None),
+		)
+		return
 
 	logger.warning("Gemini history verification exhausted retries for cid=%s source=%s", cid, source)
+
+
+async def validate_gemini_client_session(client: GeminiClient, psid: str, source: str):
+	"""Verify that an initialized client can create and read back a normal persistent Gemini chat."""
+	validation_cid = None
+	try:
+		response = await client.generate_content(SESSION_VALIDATION_PROMPT, temporary=False)
+		response_text = getattr(response, "text", "") or ""
+		metadata = getattr(response, "metadata", None) or []
+		validation_cid = metadata[0] if metadata else None
+
+		if response_indicates_auth_failure(response_text):
+			raise ValueError("validation probe returned signed-out or empty content")
+
+		if not validation_cid:
+			raise ValueError("validation probe returned no persistent chat metadata")
+
+		recovered = await fetch_readable_chat_response(client, validation_cid, [1, 3, 8])
+		if not recovered or response_indicates_auth_failure(getattr(recovered, "text", "") or ""):
+			raise ValueError("validation probe chat was not readable from Gemini history")
+
+		persist_runtime_cookies(psid, client)
+		logger.info("Gemini session validation succeeded using %s credentials", source)
+	finally:
+		if validation_cid:
+			try:
+				await client.delete_chat(validation_cid)
+			except Exception:
+				logger.debug("Failed to delete Gemini validation chat %s", validation_cid)
 
 
 def load_or_generate_secret() -> str:
@@ -576,10 +613,13 @@ async def get_gemini_client():
 			cached_psidts = load_cached_1psidts(psid)
 			attempts = []
 
+			if cached_psidts:
+				attempts.append(("cache", cached_psidts))
 			if SECURE_1PSIDTS:
 				attempts.append(("environment", SECURE_1PSIDTS))
-			if cached_psidts and cached_psidts != SECURE_1PSIDTS:
-				attempts.append(("cache", cached_psidts))
+
+			seen_psidts = set()
+			attempts = [(source, psidts) for source, psidts in attempts if psidts and not (psidts in seen_psidts or seen_psidts.add(psidts))]
 
 			if not attempts:
 				raise HTTPException(status_code=500, detail="Missing SECURE_1PSIDTS and no cached rotated 1PSIDTS is available")
@@ -591,14 +631,17 @@ async def get_gemini_client():
 
 					tmp_client = GeminiClient(psid, psidts)
 					await tmp_client.init(timeout=300)
-					logger.info("Gemini client initialized successfully")
+					await validate_gemini_client_session(tmp_client, psid, source)
 
-					persist_runtime_cookies(psid, tmp_client)
 					gemini_client = tmp_client
 					break
 				except Exception as e:
 					last_error = e
-					logger.warning(f"Gemini init failed using {source} 1PSIDTS: {e}")
+					logger.warning(f"Gemini session setup failed using {source} 1PSIDTS: {e}")
+					try:
+						await tmp_client.close()
+					except Exception:
+						pass
 
 			if gemini_client is None:
 				raise last_error
