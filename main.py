@@ -49,6 +49,76 @@ def summarize_cookie_value(value: str) -> str:
 		return "empty"
 	return f"len={len(value)} prefix={value[:8]}..."
 
+
+def get_cached_1psidts_path(psid: str) -> str:
+	"""Return the cache path for a rotated 1PSIDTS value."""
+	if not psid or not re.match("^[\\w\\-\\.]+$", psid):
+		return ""
+	return os.path.join(COOKIE_DIR_PATH, f".cached_1psidts_{psid}.txt")
+
+
+def load_cached_1psidts(psid: str) -> str:
+	"""Load a cached rotated 1PSIDTS value for the given 1PSID."""
+	cached_file_path = get_cached_1psidts_path(psid)
+	if not cached_file_path:
+		return ""
+
+	if os.path.exists(cached_file_path):
+		try:
+			content = Path(cached_file_path).read_text().strip()
+			if content:
+				return content
+		except Exception as e:
+			logger.warning(f"Error reading cache file {cached_file_path}: {e}")
+
+	return ""
+
+
+def save_cached_1psidts(psid: str, psidts: str):
+	"""Persist the latest rotated 1PSIDTS so rebuilds can retry with it."""
+	cached_file_path = get_cached_1psidts_path(psid)
+	if not cached_file_path or not psidts:
+		return
+
+	try:
+		os.makedirs(COOKIE_DIR_PATH, exist_ok=True)
+		current_val = Path(cached_file_path).read_text().strip() if os.path.exists(cached_file_path) else None
+		if current_val != psidts:
+			Path(cached_file_path).write_text(psidts)
+			logger.info("Persisted rotated 1PSIDTS to %s", cached_file_path)
+			try:
+				os.chmod(cached_file_path, 0o600)
+			except Exception:
+				pass
+	except Exception as e:
+		logger.warning(f"Failed to persist cached 1PSIDTS: {e}")
+
+
+def get_cookie_value(cookies, name: str) -> str:
+	"""Safely read a cookie value from an httpx cookie jar or mapping."""
+	if not cookies:
+		return ""
+
+	for domain in (".google.com", ".googleusercontent.com", None):
+		try:
+			value = cookies.get(name, domain=domain) if domain is not None else cookies.get(name)
+		except TypeError:
+			value = cookies.get(name)
+		except Exception:
+			value = ""
+
+		if value:
+			return value
+
+	return ""
+
+
+def persist_runtime_cookies(psid: str, client: GeminiClient):
+	"""Save the freshest rotated 1PSIDTS currently held by the Gemini client."""
+	latest_psidts = get_cookie_value(getattr(client, "cookies", None), "__Secure-1PSIDTS")
+	if latest_psidts:
+		save_cached_1psidts(psid, latest_psidts)
+
 # Add CORS middleware
 app.add_middleware(
 	CORSMiddleware,
@@ -71,9 +141,6 @@ AUTO_DELETE_CHAT = os.environ.get("AUTO_DELETE_CHAT", "true").lower() == "true" 
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 SECRET_FILE_PATH = os.path.join(os.path.dirname(__file__), "secrets", "proxy_secret")
 COOKIE_DIR_PATH = os.path.join(os.path.dirname(__file__), "secrets")
-
-# Implicitly configure gemini-webapi to persist auto-refreshed cookies
-os.environ["GEMINI_COOKIE_PATH"] = COOKIE_DIR_PATH
 
 async def background_delete_chat(client: GeminiClient, cid: str):
 	"""Deletes a chat conversation in the background to avoid blocking the main thread."""
@@ -519,86 +586,6 @@ def prepare_conversation(messages: List[Message]) -> tuple:
 	return conversation, temp_files
 
 
-def get_1psidts_marker_path(psid: str) -> str:
-	"""Build a stable marker filename without depending on raw cookie characters."""
-	marker_key = hashlib.sha256((psid or "unknown").encode("utf-8")).hexdigest()
-	return os.path.join(COOKIE_DIR_PATH, f".1psidts_consumed_{marker_key}")
-
-
-def get_1psidts_value(psid: str, psidts_env: str) -> str:
-	"""
-	Get the 1PSIDTS value. Prioritizes the environment variable if it's new (not consumed).
-	If the provided psidts_env matches the historically consumed value, or is empty,
-	it falls back to reading the cached value from the cache directory.
-	"""
-	marker_path = get_1psidts_marker_path(psid)
-	logger.info(
-		"Selecting 1PSIDTS source: env=%s marker_exists=%s marker_path=%s",
-		summarize_cookie_value(psidts_env),
-		os.path.exists(marker_path),
-		marker_path,
-	)
-
-	if psidts_env:
-		consumed_val = ""
-		if os.path.exists(marker_path):
-			try:
-				consumed_val = Path(marker_path).read_text().strip()
-				logger.info("Loaded consumed marker value: %s", summarize_cookie_value(consumed_val))
-			except Exception as e:
-				logger.warning(f"Error reading marker file {marker_path}: {e}")
-
-		if psidts_env != consumed_val:
-			logger.info("Using SECURE_1PSIDTS from environment because it differs from the consumed marker.")
-			return psidts_env
-
-		# If the env cookie matches the consumed marker, prefer the cached value only
-		# when it is actually available. Otherwise keep using the env cookie.
-		if not psid:
-			logger.info("Using SECURE_1PSIDTS from environment because SECURE_1PSID is empty.")
-			return psidts_env
-
-		if not re.match("^[\\w\\-\\.]+$", psid):
-			logger.warning("SECURE_1PSID contains characters that cannot be used for the cache filename; falling back to SECURE_1PSIDTS from environment.")
-			return psidts_env
-
-		cached_file_path = os.path.join(COOKIE_DIR_PATH, f".cached_1psidts_{psid}.txt")
-		logger.info("Consumed marker matches env value. Checking cached 1PSIDTS at %s", cached_file_path)
-		if os.path.exists(cached_file_path):
-			try:
-				content = Path(cached_file_path).read_text().strip()
-				if content:
-					logger.info("Using cached 1PSIDTS value: %s", summarize_cookie_value(content))
-					return content
-			except Exception as e:
-				logger.warning(f"Error reading cache file {cached_file_path}: {e}")
-
-		logger.info("Cached 1PSIDTS unavailable. Falling back to SECURE_1PSIDTS from environment.")
-		return psidts_env
-
-	if not psid:
-		logger.warning("SECURE_1PSID is empty. Cannot load cached 1PSIDTS.")
-		return ""
-
-	if not re.match("^[\\w\\-\\.]+$", psid):
-		logger.warning("SECURE_1PSID contains invalid characters for a safe filename.")
-		return ""
-
-	cached_file_path = os.path.join(COOKIE_DIR_PATH, f".cached_1psidts_{psid}.txt")
-	logger.info("SECURE_1PSIDTS env is empty. Checking cached 1PSIDTS at %s", cached_file_path)
-	if os.path.exists(cached_file_path):
-		try:
-			content = Path(cached_file_path).read_text().strip()
-			if content:
-				logger.info("Using cached 1PSIDTS because env value is empty: %s", summarize_cookie_value(content))
-				return content
-		except Exception as e:
-			logger.warning(f"Error reading cache file {cached_file_path}: {e}")
-
-	logger.warning("No usable 1PSIDTS value found in env or cache.")
-	return ""
-
-
 # Dependency to get the initialized Gemini client
 async def get_gemini_client():
 	"""
@@ -611,33 +598,45 @@ async def get_gemini_client():
 	if gemini_client is None:
 		try:
 			psid = SECURE_1PSID
-			psidts = get_1psidts_value(psid, SECURE_1PSIDTS)
-			logger.info(
-				"Initializing GeminiClient with cookie summary: psid=%s psidts=%s",
-				summarize_cookie_value(psid),
-				summarize_cookie_value(psidts),
-			)
-
-			tmp_client = GeminiClient(psid, psidts)
-			await tmp_client.init(timeout=300)
-			logger.info(
-				"Gemini runtime fingerprint: gemini-webapi=%s build_label=%s session_id=%s",
-				get_gemini_webapi_version(),
-				getattr(tmp_client, "build_label", None),
-				getattr(tmp_client, "session_id", None),
-			)
-
-			gemini_client = tmp_client
+			cached_psidts = load_cached_1psidts(psid)
+			attempts = []
 
 			if SECURE_1PSIDTS:
-				marker_path = get_1psidts_marker_path(psid)
+				attempts.append(("environment", SECURE_1PSIDTS))
+			if cached_psidts and cached_psidts != SECURE_1PSIDTS:
+				attempts.append(("cache", cached_psidts))
+
+			if not attempts:
+				raise HTTPException(status_code=500, detail="Missing SECURE_1PSIDTS and no cached rotated 1PSIDTS is available")
+
+			last_error = None
+			for source, psidts in attempts:
 				try:
-					current_val = Path(marker_path).read_text().strip() if os.path.exists(marker_path) else None
-					if current_val != SECURE_1PSIDTS:
-						Path(marker_path).write_text(SECURE_1PSIDTS)
-						logger.info("Successfully marked SECURE_1PSIDTS as consumed at %s", marker_path)
+					logger.info(
+						"Initializing GeminiClient with cookie summary: source=%s psid=%s psidts=%s",
+						source,
+						summarize_cookie_value(psid),
+						summarize_cookie_value(psidts),
+					)
+
+					tmp_client = GeminiClient(psid, psidts)
+					await tmp_client.init(timeout=300)
+					logger.info(
+						"Gemini runtime fingerprint: gemini-webapi=%s build_label=%s session_id=%s",
+						get_gemini_webapi_version(),
+						getattr(tmp_client, "build_label", None),
+						getattr(tmp_client, "session_id", None),
+					)
+
+					persist_runtime_cookies(psid, tmp_client)
+					gemini_client = tmp_client
+					break
 				except Exception as e:
-					logger.warning(f"Failed to update marker file: {e}")
+					last_error = e
+					logger.warning(f"Gemini init failed using {source} 1PSIDTS: {e}")
+
+			if gemini_client is None:
+				raise last_error
 
 		except Exception as e:
 			logger.error(f"Failed to initialize Gemini client: {str(e)}")
@@ -827,6 +826,7 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 						yielded_images,
 						len(text_buffer),
 					)
+					persist_runtime_cookies(SECURE_1PSID, gemini_client)
 					if last_metadata and len(last_metadata) > 0 and not AUTO_DELETE_CHAT:
 						asyncio.create_task(background_verify_chat_persistence(gemini_client, last_metadata[0], "stream"))
 				except Exception as e:
@@ -854,6 +854,7 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 			logger.info("Sending request to Gemini...")
 			try:
 				response = await gemini_client.generate_content(conversation, **gen_kwargs)
+				persist_runtime_cookies(SECURE_1PSID, gemini_client)
 				logger.info(
 					"Non-stream response metadata: metadata=%s rcid=%s images=%s thoughts=%s",
 					getattr(response, "metadata", None),
@@ -969,9 +970,10 @@ async def proxy_image(url: str, sig: str):
 	# Use scoped cookies to prevent leakage during redirects
 	jar = httpx.Cookies()
 
-	# Get the correct value dynamically
+	# Use the freshest available 1PSIDTS without overriding env cookies up front.
 	psid = SECURE_1PSID
-	psidts = get_1psidts_value(psid, SECURE_1PSIDTS)
+	psidts = get_cookie_value(getattr(gemini_client, "cookies", None), "__Secure-1PSIDTS") or SECURE_1PSIDTS or load_cached_1psidts(psid)
+	logger.info("Proxy image cookie summary: psid=%s psidts=%s", summarize_cookie_value(psid), summarize_cookie_value(psidts))
 
 	jar.set("__Secure-1PSID", psid, domain=".google.com")
 	jar.set("__Secure-1PSIDTS", psidts, domain=".google.com")
