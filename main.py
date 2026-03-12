@@ -121,6 +121,12 @@ app.add_middleware(
 	allow_headers=["*"],
 )
 
+
+@app.on_event("startup")
+async def warm_up_gemini_client():
+	"""Initialize and validate the Gemini client once during process startup."""
+	await get_gemini_client()
+
 # Global client
 gemini_client = None
 
