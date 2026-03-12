@@ -448,13 +448,19 @@ def prepare_conversation(messages: List[Message]) -> tuple:
 	return conversation, temp_files
 
 
+def get_1psidts_marker_path(psid: str) -> str:
+	"""Build a stable marker filename without depending on raw cookie characters."""
+	marker_key = hashlib.sha256((psid or "unknown").encode("utf-8")).hexdigest()
+	return os.path.join(COOKIE_DIR_PATH, f".1psidts_consumed_{marker_key}")
+
+
 def get_1psidts_value(psid: str, psidts_env: str) -> str:
 	"""
 	Get the 1PSIDTS value. Prioritizes the environment variable if it's new (not consumed).
 	If the provided psidts_env matches the historically consumed value, or is empty,
 	it falls back to reading the cached value from the cache directory.
 	"""
-	marker_path = os.path.join(COOKIE_DIR_PATH, f".1psidts_consumed_{psid or 'unknown'}")
+	marker_path = get_1psidts_marker_path(psid)
 
 	if psidts_env:
 		consumed_val = ""
@@ -466,6 +472,26 @@ def get_1psidts_value(psid: str, psidts_env: str) -> str:
 
 		if psidts_env != consumed_val:
 			return psidts_env
+
+		# If the env cookie matches the consumed marker, prefer the cached value only
+		# when it is actually available. Otherwise keep using the env cookie.
+		if not psid:
+			return psidts_env
+
+		if not re.match("^[\\w\\-\\.]+$", psid):
+			logger.warning("SECURE_1PSID contains characters that cannot be used for the cache filename; falling back to SECURE_1PSIDTS from environment.")
+			return psidts_env
+
+		cached_file_path = os.path.join(COOKIE_DIR_PATH, f".cached_1psidts_{psid}.txt")
+		if os.path.exists(cached_file_path):
+			try:
+				content = Path(cached_file_path).read_text().strip()
+				if content:
+					return content
+			except Exception as e:
+				logger.warning(f"Error reading cache file {cached_file_path}: {e}")
+
+		return psidts_env
 
 	if not psid:
 		logger.warning("SECURE_1PSID is empty. Cannot load cached 1PSIDTS.")
@@ -507,7 +533,7 @@ async def get_gemini_client():
 			gemini_client = tmp_client
 
 			if SECURE_1PSIDTS:
-				marker_path = os.path.join(COOKIE_DIR_PATH, f".1psidts_consumed_{psid or 'unknown'}")
+				marker_path = get_1psidts_marker_path(psid)
 				try:
 					current_val = Path(marker_path).read_text().strip() if os.path.exists(marker_path) else None
 					if current_val != SECURE_1PSIDTS:
