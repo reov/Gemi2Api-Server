@@ -54,10 +54,7 @@ TEMPORARY_CHAT = os.environ.get("TEMPORARY_CHAT", "false").lower() == "true"
 AUTO_DELETE_CHAT = os.environ.get("AUTO_DELETE_CHAT", "true").lower() == "true" and not TEMPORARY_CHAT
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 SECRET_FILE_PATH = os.path.join(os.path.dirname(__file__), "secrets", "proxy_secret")
-COOKIE_DIR_PATH = os.path.join(os.path.dirname(__file__), "secrets")
-
-# Implicitly configure gemini-webapi to persist auto-refreshed cookies
-os.environ["GEMINI_COOKIE_PATH"] = COOKIE_DIR_PATH
+COOKIE_FILE_PATH = os.path.join(os.path.dirname(__file__), "secrets", "cookies.json")
 
 async def background_delete_chat(client: GeminiClient, cid: str):
 	"""Deletes a chat conversation in the background to avoid blocking the main thread."""
@@ -459,8 +456,29 @@ async def get_gemini_client():
 	global gemini_client
 	if gemini_client is None:
 		try:
-			gemini_client = GeminiClient(SECURE_1PSID, SECURE_1PSIDTS)
+			cookies_dict = {}
+			if os.path.exists(COOKIE_FILE_PATH):
+				try:
+					cookies_dict = json.loads(Path(COOKIE_FILE_PATH).read_text())
+				except Exception as e:
+					logger.warning(f"Error reading {COOKIE_FILE_PATH}: {e}")
+
+			if SECURE_1PSID and "__Secure-1PSID" not in cookies_dict:
+				cookies_dict["__Secure-1PSID"] = SECURE_1PSID
+			if SECURE_1PSIDTS and "__Secure-1PSIDTS" not in cookies_dict:
+				cookies_dict["__Secure-1PSIDTS"] = SECURE_1PSIDTS
+
+			gemini_client = GeminiClient(cookies=cookies_dict)
 			await gemini_client.init(timeout=300)
+
+			# Save the initialized complete cookie jar back to persistent storage
+			try:
+				updated_cookies = dict(gemini_client.cookies)
+				if updated_cookies:
+					Path(COOKIE_FILE_PATH).write_text(json.dumps(updated_cookies))
+			except Exception as e:
+				logger.warning(f"Error saving initialized cookies: {e}")
+
 		except Exception as e:
 			logger.error(f"Failed to initialize Gemini client: {str(e)}")
 			raise HTTPException(status_code=500, detail=f"Failed to initialize Gemini client: {str(e)}")
@@ -504,10 +522,17 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 	try:
 		# 确保客户端已初始化
 		global gemini_client
-		if gemini_client is None:
-			gemini_client = GeminiClient(SECURE_1PSID, SECURE_1PSIDTS)
-			await gemini_client.init(timeout=300)
-			logger.info("Gemini client initialized successfully")
+		gemini_client = await get_gemini_client()
+		
+		# Automatically save the latest cookies to persistent storage (in case background refresh updated them)
+		try:
+			updated_cookies = dict(gemini_client.cookies)
+			if updated_cookies:
+				Path(COOKIE_FILE_PATH).write_text(json.dumps(updated_cookies))
+		except Exception:
+			pass
+		
+		logger.info("Gemini client is ready")
 
 		# 转换消息为对话格式
 		conversation, temp_files = prepare_conversation(request.messages)
@@ -753,17 +778,13 @@ async def proxy_image(url: str, sig: str):
 	psid = SECURE_1PSID
 	psidts = SECURE_1PSIDTS
 
-	# Formulate the expected filename for the cached 1PSIDTS
-	cached_file_path = os.path.join(COOKIE_DIR_PATH, f".cached_1psidts_{psid}.txt")
-	
-	if os.path.exists(cached_file_path):
+	if os.path.exists(COOKIE_FILE_PATH):
 		try:
-			# The file only contains the raw __Secure-1PSIDTS string
-			content = Path(cached_file_path).read_text().strip()
-			if content:
-				psidts = content
+			data = json.loads(Path(COOKIE_FILE_PATH).read_text())
+			psid = data.get("__Secure-1PSID", psid)
+			psidts = data.get("__Secure-1PSIDTS", psidts)
 		except Exception as e:
-			logger.warning(f"Error reading fresh proxy cookies from {cached_file_path}: {e}")
+			logger.warning(f"Error reading fresh proxy cookies from {COOKIE_FILE_PATH}: {e}")
 
 	jar.set("__Secure-1PSID", psid, domain=".google.com")
 	jar.set("__Secure-1PSIDTS", psidts, domain=".google.com")
