@@ -98,12 +98,23 @@ def save_cached_1psidts(psid: str, psidts: str):
 		os.makedirs(COOKIE_DIR_PATH, exist_ok=True)
 		current_val = Path(cached_file_path).read_text().strip() if os.path.exists(cached_file_path) else None
 		if current_val != psidts:
-			Path(cached_file_path).write_text(psidts)
-			logger.debug("Persisted rotated 1PSIDTS to %s", cached_file_path)
+			cache_dir = os.path.dirname(cached_file_path)
+			with tempfile.NamedTemporaryFile("w", dir=cache_dir, delete=False, encoding="utf-8") as temp_file:
+				temp_file.write(psidts)
+				temp_file.flush()
+				try:
+					os.fsync(temp_file.fileno())
+				except OSError:
+					pass
+				temp_file_path = temp_file.name
+
 			try:
-				os.chmod(cached_file_path, 0o600)
+				os.chmod(temp_file_path, 0o600)
 			except Exception:
 				pass
+
+			os.replace(temp_file_path, cached_file_path)
+			logger.debug("Persisted rotated 1PSIDTS to %s", cached_file_path)
 	except Exception as e:
 		logger.warning(f"Failed to persist cached 1PSIDTS: {e}")
 
@@ -181,7 +192,7 @@ def response_indicates_auth_failure(text: str) -> bool:
 
 async def fetch_readable_chat_response(client: GeminiClient, cid: str, retry_delays: List[int]) -> Optional[object]:
 	"""Poll Gemini history until the chat becomes readable or retries are exhausted."""
-	for delay in retry_delays:
+	for attempt, delay in enumerate(retry_delays, start=1):
 		try:
 			if delay:
 				await asyncio.sleep(delay)
@@ -189,7 +200,15 @@ async def fetch_readable_chat_response(client: GeminiClient, cid: str, retry_del
 			recovered = await client.fetch_latest_chat_response(cid)
 			if recovered and getattr(recovered, "text", ""):
 				return recovered
-		except Exception:
+		except Exception as e:
+			logger.exception(
+				"Gemini history read failed for cid=%s on retry %s/%s after %ss delay: %s",
+				cid,
+				attempt,
+				len(retry_delays),
+				delay,
+				e,
+			)
 			continue
 
 	return None
@@ -528,8 +547,6 @@ async def list_models():
 # Helper to convert between Gemini and OpenAI model names
 def map_model_name(openai_model_name: str) -> Model:
 	"""根据模型名称字符串查找匹配的 Model 枚举值"""
-	# all_models = [m.model_name if hasattr(m, "model_name") else str(m) for m in Model]
-
 	# 首先尝试直接查找匹配的模型名称
 	for m in Model:
 		model_name = m.model_name if hasattr(m, "model_name") else str(m)
