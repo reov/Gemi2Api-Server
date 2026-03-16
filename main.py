@@ -12,6 +12,7 @@ import secrets
 import tempfile
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Union
@@ -32,7 +33,27 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 set_log_level("INFO")
 
-app = FastAPI(title="Gemini API FastAPI Server")
+gemini_client = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+	"""Initialize the Gemini client during startup and close it on shutdown."""
+	await get_gemini_client()
+	try:
+		yield
+	finally:
+		global gemini_client
+		if gemini_client is not None:
+			try:
+				await gemini_client.close()
+			except Exception as e:
+				logger.warning(f"Failed to close Gemini client during shutdown: {e}")
+			finally:
+				gemini_client = None
+
+
+app = FastAPI(title="Gemini API FastAPI Server", lifespan=lifespan)
 
 
 def get_gemini_webapi_version() -> str:
@@ -120,15 +141,6 @@ app.add_middleware(
 	allow_methods=["*"],
 	allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-async def warm_up_gemini_client():
-	"""Initialize and validate the Gemini client once during process startup."""
-	await get_gemini_client()
-
-# Global client
-gemini_client = None
 
 # Authentication credentials
 SECURE_1PSID = os.environ.get("SECURE_1PSID", "")
@@ -625,7 +637,13 @@ async def get_gemini_client():
 				attempts.append(("environment", SECURE_1PSIDTS))
 
 			seen_psidts = set()
-			attempts = [(source, psidts) for source, psidts in attempts if psidts and not (psidts in seen_psidts or seen_psidts.add(psidts))]
+			new_attempts = []
+			for source, psidts in attempts:
+				if not psidts or psidts in seen_psidts:
+					continue
+				seen_psidts.add(psidts)
+				new_attempts.append((source, psidts))
+			attempts = new_attempts
 
 			if not attempts:
 				raise HTTPException(status_code=500, detail="Missing SECURE_1PSIDTS and no cached rotated 1PSIDTS is available")
