@@ -2,8 +2,8 @@ import asyncio
 import base64
 import hashlib
 import hmac
-import io
 import importlib.metadata
+import io
 import json
 import logging
 import os
@@ -479,7 +479,7 @@ async def verify_api_key(authorization: str = Header(None)):
 @app.middleware("http")
 async def error_handling(request: Request, call_next):
 	"""
-	Global middleware to catch unhandled exceptions, log the error, 
+	Global middleware to catch unhandled exceptions, log the error,
 	and return a standardized HTTP 500 response.
 	"""
 	try:
@@ -539,7 +539,7 @@ def map_model_name(openai_model_name: str) -> Model:
 # Prepare conversation history from OpenAI messages format
 def prepare_conversation(messages: List[Message]) -> tuple:
 	"""
-	Convert a list of OpenAI-formatted message objects into a 
+	Convert a list of OpenAI-formatted message objects into a
 	flat string conversation format suitable for the Gemini API.
 	Also extracts and saves base64 images to temporary files.
 
@@ -694,7 +694,7 @@ def extract_image_markdown(response, base_url: str) -> str:
 async def create_chat_completion(request: ChatCompletionRequest, raw_request: Request, api_key: str = Depends(verify_api_key)):
 	"""
 	Handle chat completion requests, translating from OpenAI API format to Gemini API format.
-	Supports both streaming and non-streaming responses, caching, thinking features, 
+	Supports both streaming and non-streaming responses, caching, thinking features,
 	and background conversation cleanup based on configuration.
 	"""
 	try:
