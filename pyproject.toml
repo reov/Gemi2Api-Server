@@ -27,7 +27,7 @@ url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
 
 [dependency-groups]
 dev = [
-    "ruff==0.15.6",
+    "ruff>=0.15.6",
 ]
 
 [tool.ruff]
