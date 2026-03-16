@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 set_log_level("INFO")
 
 gemini_client = None
+gemini_client_lock = asyncio.Lock()
 
 
 @asynccontextmanager
@@ -603,7 +604,13 @@ async def get_gemini_client():
 		HTTPException: If initialization fails due to invalid parameters or connection issues.
 	"""
 	global gemini_client
-	if gemini_client is None:
+	if gemini_client is not None:
+		return gemini_client
+
+	async with gemini_client_lock:
+		if gemini_client is not None:
+			return gemini_client
+
 		try:
 			psid = SECURE_1PSID
 			cached_psidts = load_cached_1psidts(psid)
@@ -628,6 +635,7 @@ async def get_gemini_client():
 
 			last_error = None
 			for source, psidts in attempts:
+				tmp_client = None
 				try:
 					logger.info("Initializing Gemini client using %s credentials", source)
 
@@ -640,10 +648,11 @@ async def get_gemini_client():
 				except Exception as e:
 					last_error = e
 					logger.warning(f"Gemini session setup failed using {source} 1PSIDTS: {e}")
-					try:
-						await tmp_client.close()
-					except Exception:
-						pass
+					if tmp_client is not None:
+						try:
+							await tmp_client.close()
+						except Exception:
+							pass
 
 			if gemini_client is None:
 				raise last_error
