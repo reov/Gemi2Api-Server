@@ -68,7 +68,7 @@ def get_cached_1psidts_path(psid: str) -> str:
 	"""Return the cache path for a rotated 1PSIDTS value."""
 	if not psid or not re.match("^[\\w\\-\\.]+$", psid):
 		return ""
-	return os.path.join(COOKIE_DIR_PATH, f".cached_1psidts_{psid}.txt")
+	return os.path.join(GEMINI_COOKIE_PATH, f".cached_1psidts_{psid}.txt")
 
 
 def load_cached_1psidts(psid: str) -> str:
@@ -87,38 +87,6 @@ def load_cached_1psidts(psid: str) -> str:
 
 	return ""
 
-
-def save_cached_1psidts(psid: str, psidts: str):
-	"""Persist the latest rotated 1PSIDTS so rebuilds can retry with it."""
-	cached_file_path = get_cached_1psidts_path(psid)
-	if not cached_file_path or not psidts:
-		return
-
-	try:
-		os.makedirs(COOKIE_DIR_PATH, exist_ok=True)
-		current_val = Path(cached_file_path).read_text().strip() if os.path.exists(cached_file_path) else None
-		if current_val != psidts:
-			cache_dir = os.path.dirname(cached_file_path)
-			with tempfile.NamedTemporaryFile("w", dir=cache_dir, delete=False, encoding="utf-8") as temp_file:
-				temp_file.write(psidts)
-				temp_file.flush()
-				try:
-					os.fsync(temp_file.fileno())
-				except OSError:
-					pass
-				temp_file_path = temp_file.name
-
-			try:
-				os.chmod(temp_file_path, 0o600)
-			except Exception:
-				pass
-
-			os.replace(temp_file_path, cached_file_path)
-			logger.debug("Persisted rotated 1PSIDTS to %s", cached_file_path)
-	except Exception as e:
-		logger.warning(f"Failed to persist cached 1PSIDTS: {e}")
-
-
 def get_cookie_value(cookies, name: str) -> str:
 	"""Safely read a cookie value from an httpx cookie jar or mapping."""
 	if not cookies:
@@ -136,14 +104,6 @@ def get_cookie_value(cookies, name: str) -> str:
 			return value
 
 	return ""
-
-
-def persist_runtime_cookies(psid: str, client: GeminiClient):
-	"""Save the freshest rotated 1PSIDTS currently held by the Gemini client."""
-	latest_psidts = get_cookie_value(getattr(client, "cookies", None), "__Secure-1PSIDTS")
-	if latest_psidts:
-		save_cached_1psidts(psid, latest_psidts)
-
 # Add CORS middleware
 app.add_middleware(
 	CORSMiddleware,
@@ -162,7 +122,7 @@ TEMPORARY_CHAT = os.environ.get("TEMPORARY_CHAT", "false").lower() == "true"
 AUTO_DELETE_CHAT = os.environ.get("AUTO_DELETE_CHAT", "true").lower() == "true" and not TEMPORARY_CHAT
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 SECRET_FILE_PATH = os.path.join(os.path.dirname(__file__), "secrets", "proxy_secret")
-COOKIE_DIR_PATH = os.path.join(os.path.dirname(__file__), "secrets")
+GEMINI_COOKIE_PATH = os.path.join(os.path.dirname(__file__), "secrets")
 SESSION_VALIDATION_PROMPT = "Reply with exactly OK."
 AUTH_FAILURE_TEXT_PATTERNS = (
 	"are you signed in",
@@ -171,6 +131,8 @@ AUTH_FAILURE_TEXT_PATTERNS = (
 	"log in",
 	"logged in",
 )
+
+os.environ.setdefault("GEMINI_COOKIE_PATH", GEMINI_COOKIE_PATH)
 
 async def background_delete_chat(client: GeminiClient, cid: str):
 	"""Deletes a chat conversation in the background to avoid blocking the main thread."""
@@ -234,7 +196,7 @@ async def background_verify_chat_persistence(client: GeminiClient, cid: str, sou
 	logger.warning("Gemini history verification exhausted retries for cid=%s source=%s", cid, source)
 
 
-async def validate_gemini_client_session(client: GeminiClient, psid: str, source: str):
+async def validate_gemini_client_session(client: GeminiClient, source: str):
 	"""Verify that an initialized client can create and read back a normal persistent Gemini chat."""
 	validation_cid = None
 	try:
@@ -253,7 +215,6 @@ async def validate_gemini_client_session(client: GeminiClient, psid: str, source
 		if not recovered or response_indicates_auth_failure(getattr(recovered, "text", "") or ""):
 			raise ValueError("validation probe chat was not readable from Gemini history")
 
-		persist_runtime_cookies(psid, client)
 		logger.info("Gemini session validation succeeded using %s credentials", source)
 	finally:
 		if validation_cid:
@@ -672,7 +633,7 @@ async def get_gemini_client():
 
 					tmp_client = GeminiClient(psid, psidts)
 					await tmp_client.init(timeout=300)
-					await validate_gemini_client_session(tmp_client, psid, source)
+					await validate_gemini_client_session(tmp_client, source)
 
 					gemini_client = tmp_client
 					break
@@ -851,7 +812,6 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 					yield "data: [DONE]\n\n"
 
 					logger.info("Streaming response completed: chunks=%s images=%s", chunk_count, yielded_images)
-					persist_runtime_cookies(SECURE_1PSID, gemini_client)
 					if last_metadata and len(last_metadata) > 0 and not AUTO_DELETE_CHAT:
 						asyncio.create_task(background_verify_chat_persistence(gemini_client, last_metadata[0], "stream"))
 				except Exception as e:
@@ -878,7 +838,6 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 			# Non-streaming response
 			try:
 				response = await gemini_client.generate_content(conversation, **gen_kwargs)
-				persist_runtime_cookies(SECURE_1PSID, gemini_client)
 
 				if AUTO_DELETE_CHAT and hasattr(response, "metadata") and response.metadata and len(response.metadata) > 0:
 					cid = response.metadata[0]
