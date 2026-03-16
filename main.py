@@ -529,11 +529,16 @@ async def error_handling(request: Request, call_next):
     """
     try:
         return await call_next(request)
-    except Exception as e:
-        logger.error(f"Request failed: {str(e)}")
+    except Exception:
+        logger.exception("Request failed")
         return JSONResponse(
             status_code=500,
-            content={"error": {"message": str(e), "type": "internal_server_error"}},
+            content={
+                "error": {
+                    "message": "Internal server error",
+                    "type": "internal_server_error",
+                }
+            },
         )
 
 
@@ -557,10 +562,12 @@ async def list_models():
 # Helper to convert between Gemini and OpenAI model names
 def map_model_name(openai_model_name: str) -> Model:
     """根据模型名称字符串查找匹配的 Model 枚举值"""
+    normalized_openai_model_name = openai_model_name.lower()
+
     # 首先尝试直接查找匹配的模型名称
     for m in Model:
         model_name = m.model_name if hasattr(m, "model_name") else str(m)
-        if openai_model_name.lower() in model_name.lower():
+        if normalized_openai_model_name in model_name.lower():
             return m
 
     # 如果找不到匹配项，使用默认映射
@@ -572,8 +579,23 @@ def map_model_name(openai_model_name: str) -> Model:
         "gemini-1.5-flash": ["1.5", "flash"],
     }
 
-    # 根据关键词匹配
-    keywords = model_keywords.get(openai_model_name, ["pro"])  # 默认使用pro模型
+    # 根据关键词模糊匹配
+    keywords = None
+    for key, candidate_keywords in model_keywords.items():
+        normalized_key = key.lower()
+        if normalized_key in normalized_openai_model_name or any(
+            kw.lower() in normalized_openai_model_name for kw in candidate_keywords
+        ):
+            keywords = candidate_keywords
+            break
+
+    if keywords is None:
+        if "flash" in normalized_openai_model_name:
+            keywords = ["flash"]
+        elif "vision" in normalized_openai_model_name:
+            keywords = ["vision"]
+        else:
+            keywords = ["pro"]
 
     for m in Model:
         model_name = m.model_name if hasattr(m, "model_name") else str(m)
@@ -1110,8 +1132,8 @@ async def proxy_image(url: str, sig: str):
     psid = SECURE_1PSID
     psidts = (
         get_cookie_value(getattr(gemini_client, "cookies", None), "__Secure-1PSIDTS")
-        or SECURE_1PSIDTS
         or load_cached_1psidts(psid)
+        or SECURE_1PSIDTS
     )
 
     jar.set("__Secure-1PSID", psid, domain=".google.com")
