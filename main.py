@@ -135,6 +135,7 @@ AUTH_FAILURE_TEXT_PATTERNS = (
 	"log in",
 	"logged in",
 )
+DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36 Edg/144.0.0.0"
 
 os.environ.setdefault("GEMINI_COOKIE_PATH", GEMINI_COOKIE_PATH)
 
@@ -555,7 +556,9 @@ def map_model_name(openai_model_name: str) -> Model:
 	keywords = None
 	for key, candidate_keywords in model_keywords.items():
 		normalized_key = key.lower()
-		if normalized_key in normalized_openai_model_name or any(kw.lower() in normalized_openai_model_name for kw in candidate_keywords):
+		matches_key = normalized_key in normalized_openai_model_name
+		matches_any_kw = any(kw.lower() in normalized_openai_model_name for kw in candidate_keywords)
+		if matches_key or matches_any_kw:
 			keywords = candidate_keywords
 			break
 
@@ -1016,7 +1019,7 @@ async def proxy_image(url: str, sig: str):
 
 	# Minimal browser-like headers
 	headers = {
-		"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36 Edg/144.0.0.0",
+		"User-Agent": DEFAULT_USER_AGENT,
 		"Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
 		"Accept-Language": "en-US,en;q=0.9",
 		"Referer": "https://gemini.google.com/",
