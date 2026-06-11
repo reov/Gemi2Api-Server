@@ -323,7 +323,7 @@
                 <div class="status-dot" id="statusDot"></div>
                 <span id="statusText">运行中</span>
             </div>
-            <a href="https://github.com/zhiyu1998/Gemi2Api-Server" target="_blank" class="github-link" title="GitHub">
+            <a href="https://github.com/zhiyu1998/Gemi2Api-Server" target="_blank" rel="noopener noreferrer" class="github-link" title="GitHub">
                 <svg viewBox="0 0 1024 1024" width="28" height="28">
                     <path d="M64 512c0 195.2 124.8 361.6 300.8 422.4 22.4 6.4 19.2-9.6 19.2-22.4v-76.8c-134.4 16-140.8-73.6-150.4-89.6-19.2-32-60.8-38.4-48-54.4 32-16 64 3.2 99.2 57.6 25.6 38.4 76.8 32 105.6 25.6 6.4-22.4 19.2-44.8 35.2-60.8-144-22.4-201.6-108.8-201.6-211.2 0-48 16-96 48-131.2-22.4-60.8 0-115.2 3.2-121.6 57.6-6.4 118.4 41.6 124.8 44.8 32-9.6 70.4-12.8 112-12.8 41.6 0 80 6.4 112 12.8 12.8-9.6 67.2-48 121.6-44.8 3.2 6.4 25.6 57.6 6.4 118.4 32 38.4 48 83.2 48 131.2 0 102.4-57.6 188.8-201.6 214.4 22.4 22.4 38.4 54.4 38.4 92.8v112c0 9.6 0 19.2 16 19.2C832 876.8 960 710.4 960 512c0-246.4-201.6-448-448-448S64 265.6 64 512z" fill="#e0e0e0"></path>
                 </svg>
@@ -403,7 +403,7 @@
             <div class="card">
                 <h3>🍪 Gemini Cookie 配置</h3>
                 <div class="warning">
-                    💡 登录 <a href="https://gemini.google.com/" target="_blank" style="color: #4fc3f7;">gemini.google.com</a>，F12 → Application → Cookies 复制以下两个值。
+                    💡 登录 <a href="https://gemini.google.com/" target="_blank" rel="noopener noreferrer" style="color: #4fc3f7;">gemini.google.com</a>，F12 → Application → Cookies 复制以下两个值。
                 </div>
                 <div class="form-group">
                     <label>一键粘贴（从浏览器复制的整段 Cookie，自动提取）</label>
@@ -666,8 +666,8 @@
                 if (data.data && data.data.length > 0) {
                     list.innerHTML = data.data.map(m => `
                         <div class="model-item">
-                            <span class="model-name">${m.id}</span>
-                            <span style="color: #888;">${m.owned_by}</span>
+                            <span class="model-name">${escapeHtml(m.id)}</span>
+                            <span style="color: #888;">${escapeHtml(m.owned_by)}</span>
                         </div>
                     `).join('');
                 } else {
@@ -688,10 +688,10 @@
                 if (data.logs && data.logs.length > 0) {
                     container.innerHTML = data.logs.map(log => `
                         <div class="log-entry">
-                            <span class="log-time">${log.time}</span>
-                            <span class="log-method">${log.method}</span>
-                            <span class="log-path">${log.path}</span>
-                            <span class="log-status ${log.status < 400 ? 'ok' : 'error'}">${log.status}</span>
+                            <span class="log-time">${escapeHtml(String(log.time))}</span>
+                            <span class="log-method">${escapeHtml(log.method)}</span>
+                            <span class="log-path">${escapeHtml(log.path)}</span>
+                            <span class="log-status ${log.status < 400 ? 'ok' : 'error'}">${Number(log.status)}</span>
                         </div>
                     `).join('');
                 } else {

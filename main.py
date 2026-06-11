@@ -562,13 +562,13 @@ def map_model_name(openai_model_name: str) -> Model:
 
 	# 如果找不到匹配项，使用默认映射（兼容旧版和新版模型名称）
 	model_keywords = {
-		"gemini-pro": ["pro", "2.0", "3"],
-		"gemini-pro-vision": ["vision", "pro"],
-		"gemini-flash": ["flash", "2.0", "3"],
-		"gemini-1.5-pro": ["1.5", "pro"],
-		"gemini-1.5-flash": ["1.5", "flash"],
 		"gemini-3-pro": ["3", "pro"],
 		"gemini-3-flash": ["3", "flash"],
+		"gemini-pro": ["pro", "2.0"],
+		"gemini-pro-vision": ["vision", "pro"],
+		"gemini-flash": ["flash", "2.0"],
+		"gemini-1.5-pro": ["1.5", "pro"],
+		"gemini-1.5-flash": ["1.5", "flash"],
 	}
 
 	# 根据关键词模糊匹配

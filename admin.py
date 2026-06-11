@@ -336,15 +336,16 @@ async def reinit_client(token: str = Depends(verify_admin_token)):
     """重新初始化 Gemini 客户端"""
     import main
     
-    # 关闭旧客户端
-    if main.gemini_client is not None:
-        try:
-            await main.gemini_client.close()
-        except Exception:
-            pass
-        main.gemini_client = None
+    # 在锁内关闭旧客户端，避免竞态
+    async with main.gemini_client_lock:
+        if main.gemini_client is not None:
+            try:
+                await main.gemini_client.close()
+            except Exception:
+                pass
+            main.gemini_client = None
     
-    # 尝试重新初始化
+    # 尝试重新初始化（get_gemini_client 内部也会获取锁）
     try:
         client = await main.get_gemini_client()
         if client:
