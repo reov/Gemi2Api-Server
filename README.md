@@ -1,19 +1,9 @@
 # Gemi2Api-Server
 [HanaokaYuzu / Gemini-API](https://github.com/HanaokaYuzu/Gemini-API) 的服务端简单实现
 
-[![pE79pPf.png](https://s21.ax1x.com/2025/04/28/pE79pPf.png)](https://imgse.com/i/pE79pPf)
-
 | 原始界面 | 管理面板 |
 |:---:|:---:|
 | [![pE79pPf.png](https://s21.ax1x.com/2025/04/28/pE79pPf.png)](https://imgse.com/i/pE79pPf) | [![pmKrjUO.png](https://s41.ax1x.com/2026/06/11/pmKrjUO.png)](https://imgchr.com/i/pmKrjUO) |
-
-### ✨ 新增特性
-
-- **Web 管理面板** — 可视化查看服务状态、模型列表、请求日志
-- **API_KEY 登录验证** — 保护管理面板访问，Token 12 小时有效
-- **Gemini Cookie 在线配置** — 支持一键粘贴整段 Cookie 自动提取关键字段
-- **客户端一键重连** — Cookie 更新后无需重启服务
-- **快速测试聊天** — 在管理面板内直接测试 API 响应
 
 ## 快捷部署
 
