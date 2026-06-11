@@ -8,10 +8,13 @@ RUN uv sync
 
 # Copy application code
 COPY main.py .
+COPY admin.py .
+COPY templates/ templates/
 COPY assets/ assets/
 
 # Expose the port the app runs on
-EXPOSE 8000
+ENV PORT=8000
+EXPOSE ${PORT}
 
 # Command to run the application
-CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "uv run uvicorn main:app --host 0.0.0.0 --port ${PORT}"]

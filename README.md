@@ -1,7 +1,9 @@
 # Gemi2Api-Server
 [HanaokaYuzu / Gemini-API](https://github.com/HanaokaYuzu/Gemini-API) 的服务端简单实现
 
-[![pE79pPf.png](https://s21.ax1x.com/2025/04/28/pE79pPf.png)](https://imgse.com/i/pE79pPf)
+| 原始界面 | 管理面板 |
+|:---:|:---:|
+| [![pE79pPf.png](https://s21.ax1x.com/2025/04/28/pE79pPf.png)](https://imgse.com/i/pE79pPf) | [![pmKrjUO.png](https://s41.ax1x.com/2026/06/11/pmKrjUO.png)](https://imgchr.com/i/pmKrjUO) |
 
 ## 快捷部署
 

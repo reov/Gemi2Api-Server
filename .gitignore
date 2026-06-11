@@ -6,3 +6,5 @@ uv.lock
 __pycache__
 .cursor
 .ruff_cache
+
+secrets/
