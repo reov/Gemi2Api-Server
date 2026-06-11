@@ -6,3 +6,5 @@ uv.lock
 __pycache__
 .cursor
 .ruff_cache
+=1.21.0
+=2.0.0

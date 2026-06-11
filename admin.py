@@ -6,6 +6,7 @@ Gemi2Api Server 管理面板后端
 import os
 import time
 import json
+import hashlib
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -13,8 +14,8 @@ from pathlib import Path
 from typing import Optional
 from collections import deque
 
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, HTTPException, Request, Depends
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 # 创建路由器
@@ -28,6 +29,10 @@ _stats = {
     "error_count": 0,
     "total_response_time": 0.0,
 }
+
+# 管理面板会话存储 { token: expire_timestamp }
+_admin_sessions = {}
+SESSION_EXPIRE_HOURS = 12
 
 # 环境变量路径
 ENV_FILE = Path(__file__).parent / ".env"
@@ -105,8 +110,83 @@ async def admin_page():
     return HTMLResponse(content="<h1>管理面板文件未找到</h1>", status_code=404)
 
 
+class LoginRequest(BaseModel):
+    """登录请求"""
+    api_key: str
+
+
+def _generate_token(api_key: str) -> str:
+    """生成会话 token"""
+    raw = f"{api_key}:{time.time()}:{os.urandom(16).hex()}"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _clean_expired_sessions():
+    """清理过期会话"""
+    now = time.time()
+    expired = [t for t, exp in _admin_sessions.items() if exp < now]
+    for t in expired:
+        del _admin_sessions[t]
+
+
+@router.post("/api/login")
+async def admin_login(req: LoginRequest):
+    """管理面板登录验证"""
+    from main import API_KEY
+    
+    # 如果没配置 API_KEY，不允许登录
+    if not API_KEY:
+        raise HTTPException(status_code=400, detail="未配置 API_KEY，管理面板登录已禁用")
+    
+    if req.api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="API_KEY 无效")
+    
+    # 生成 token，12小时有效
+    _clean_expired_sessions()
+    token = _generate_token(req.api_key)
+    _admin_sessions[token] = time.time() + SESSION_EXPIRE_HOURS * 3600
+    
+    return {
+        "success": True,
+        "token": token,
+        "expires_in": SESSION_EXPIRE_HOURS * 3600,
+        "message": f"登录成功，会话有效期 {SESSION_EXPIRE_HOURS} 小时"
+    }
+
+
+@router.get("/api/check")
+async def admin_check(token: str):
+    """检查会话是否有效"""
+    _clean_expired_sessions()
+    
+    if token not in _admin_sessions:
+        raise HTTPException(status_code=401, detail="会话无效或已过期")
+    
+    expire_at = _admin_sessions[token]
+    remaining = int(expire_at - time.time())
+    
+    return {
+        "valid": True,
+        "remaining_seconds": remaining,
+        "remaining_hours": round(remaining / 3600, 1)
+    }
+
+
+async def verify_admin_token(request: Request):
+    """验证管理面板 token 的依赖注入"""
+    token = request.headers.get("X-Admin-Token") or request.query_params.get("token")
+    if not token:
+        raise HTTPException(status_code=401, detail="缺少管理面板 token")
+    
+    _clean_expired_sessions()
+    if token not in _admin_sessions:
+        raise HTTPException(status_code=401, detail="会话无效或已过期")
+    
+    return token
+
+
 @router.get("/api/status")
-async def get_status():
+async def get_status(token: str = Depends(verify_admin_token)):
     """获取服务状态"""
     from main import (
         API_KEY, SECURE_1PSID, SECURE_1PSIDTS,
@@ -146,13 +226,13 @@ async def get_status():
 
 
 @router.get("/api/logs")
-async def get_logs():
+async def get_logs(token: str = Depends(verify_admin_token)):
     """获取最近的日志"""
     return {"logs": list(_request_log)}
 
 
 @router.post("/api/config")
-async def update_config(config: ConfigUpdate):
+async def update_config(config: ConfigUpdate, token: str = Depends(verify_admin_token)):
     """更新配置"""
     from main import (
         HOST, PORT, API_KEY, ENABLE_THINKING,
@@ -204,7 +284,7 @@ async def update_config(config: ConfigUpdate):
 
 
 @router.post("/api/restart")
-async def restart_service():
+async def restart_service(token: str = Depends(verify_admin_token)):
     """重启服务"""
     try:
         # 获取当前进程的命令行参数
@@ -232,7 +312,7 @@ class CookieUpdate(BaseModel):
 
 
 @router.post("/api/cookies")
-async def update_cookies(cookies: CookieUpdate):
+async def update_cookies(cookies: CookieUpdate, token: str = Depends(verify_admin_token)):
     """更新 Gemini Cookie"""
     if not cookies.secure_1psid or not cookies.secure_1psidts:
         raise HTTPException(status_code=400, detail="Cookie 值不能为空")
@@ -252,7 +332,7 @@ async def update_cookies(cookies: CookieUpdate):
 
 
 @router.post("/api/reinit")
-async def reinit_client():
+async def reinit_client(token: str = Depends(verify_admin_token)):
     """重新初始化 Gemini 客户端"""
     import main
     

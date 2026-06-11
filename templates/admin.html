@@ -331,7 +331,28 @@
         </div>
     </div>
 
-    <div class="container">
+    <!-- 登录页面 -->
+    <div class="container" id="loginPage" style="display: none;">
+        <div style="max-width: 400px; margin: 80px auto;">
+            <div class="card" style="text-align: center;">
+                <div style="margin-bottom: 20px;">
+                    <svg viewBox="0 0 1024 1024" width="64" height="64" style="margin-bottom: 10px;">
+                        <path d="M960 512.896A477.248 477.248 0 0 0 512.896 960h-1.792A477.184 477.184 0 0 0 64 512.896v-1.792A477.184 477.184 0 0 0 511.104 64h1.792A477.248 477.248 0 0 0 960 511.104z" fill="#448AFF"></path>
+                    </svg>
+                    <h2 style="color: #4fc3f7; margin-bottom: 5px;">Gemi2Api Server</h2>
+                    <p style="color: #888; font-size: 14px;">管理面板登录</p>
+                </div>
+                <div class="form-group" style="text-align: left;">
+                    <label>API_KEY</label>
+                    <input type="password" id="loginApiKey" placeholder="输入 API_KEY" style="width: 100%; padding: 12px; background: #2a2a2a; border: 1px solid #444; border-radius: 8px; color: #fff; font-size: 14px;" onkeypress="if(event.key==='Enter')adminLogin()">
+                </div>
+                <button class="btn btn-primary" style="width: 100%; padding: 12px; font-size: 16px; margin-top: 10px;" onclick="adminLogin()">登录</button>
+                <div id="loginMessage" style="margin-top: 15px; display: none; padding: 10px; border-radius: 6px; font-size: 14px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container" id="mainPage">
         <!-- 状态卡片 -->
         <div class="grid">
             <div class="card">
@@ -495,22 +516,119 @@
     <script>
         // API 基础路径
         const API_BASE = '/admin/api';
+        
+        // 会话管理
+        let adminToken = localStorage.getItem('adminToken') || '';
+        
+        // 带 token 的 fetch 封装
+        function authFetch(url, options = {}) {
+            if (!options.headers) options.headers = {};
+            if (adminToken) options.headers['X-Admin-Token'] = adminToken;
+            return fetch(url, options);
+        }
+        
+        // 检查登录状态
+        async function checkAuth() {
+            if (!adminToken) {
+                showLogin();
+                return false;
+            }
+            try {
+                const res = await fetch(`${API_BASE}/check?token=${adminToken}`);
+                if (res.ok) return true;
+            } catch (e) {}
+            // token 无效，清除并显示登录
+            adminToken = '';
+            localStorage.removeItem('adminToken');
+            showLogin();
+            return false;
+        }
+        
+        function showLogin() {
+            document.getElementById('loginPage').style.display = 'block';
+            document.getElementById('mainPage').style.display = 'none';
+        }
+        
+        function showMain() {
+            document.getElementById('loginPage').style.display = 'none';
+            document.getElementById('mainPage').style.display = 'block';
+        }
+        
+        // 登录
+        async function adminLogin() {
+            const apiKey = document.getElementById('loginApiKey').value.trim();
+            const msgEl = document.getElementById('loginMessage');
+            
+            if (!apiKey) {
+                msgEl.style.display = 'block';
+                msgEl.style.background = '#3a1a1a';
+                msgEl.style.color = '#f44336';
+                msgEl.textContent = '请输入 API_KEY';
+                return;
+            }
+            
+            try {
+                const res = await fetch(`${API_BASE}/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ api_key: apiKey })
+                });
+                
+                const data = await res.json();
+                if (res.ok) {
+                    adminToken = data.token;
+                    localStorage.setItem('adminToken', adminToken);
+                    showMain();
+                    initDashboard();
+                } else {
+                    msgEl.style.display = 'block';
+                    msgEl.style.background = '#3a1a1a';
+                    msgEl.style.color = '#f44336';
+                    msgEl.textContent = '❌ ' + (data.detail || '登录失败');
+                }
+            } catch (e) {
+                msgEl.style.display = 'block';
+                msgEl.style.background = '#3a1a1a';
+                msgEl.style.color = '#f44336';
+                msgEl.textContent = '❌ 网络错误: ' + e.message;
+            }
+        }
+        
+        // 退出登录
+        function adminLogout() {
+            adminToken = '';
+            localStorage.removeItem('adminToken');
+            showLogin();
+        }
 
         // 定时刷新状态
-        setInterval(fetchStatus, 5000);
-        setInterval(fetchLogs, 10000);
+        let refreshInterval = null;
 
-        // 初始加载
-        document.addEventListener('DOMContentLoaded', () => {
+        // 初始化仪表盘
+        async function initDashboard() {
             fetchStatus();
             fetchModels();
             fetchLogs();
+            if (refreshInterval) clearInterval(refreshInterval);
+            refreshInterval = setInterval(() => {
+                fetchStatus();
+                fetchLogs();
+            }, 10000);
+        }
+
+        // 启动
+        document.addEventListener('DOMContentLoaded', async () => {
+            const valid = await checkAuth();
+            if (valid) {
+                showMain();
+                initDashboard();
+            }
         });
 
         // 获取服务状态
         async function fetchStatus() {
             try {
-                const res = await fetch(`${API_BASE}/status`);
+                const res = await authFetch(`${API_BASE}/status`);
                 const data = await res.json();
                 
                 document.getElementById('uptime').textContent = data.uptime || '--';
@@ -563,7 +681,7 @@
         // 获取日志
         async function fetchLogs() {
             try {
-                const res = await fetch(`${API_BASE}/logs`);
+                const res = await authFetch(`${API_BASE}/logs`);
                 const data = await res.json();
                 
                 const container = document.getElementById('logContainer');
@@ -593,7 +711,7 @@
         async function toggleFeature(feature) {
             const checkbox = document.getElementById(`toggle${feature.charAt(0).toUpperCase() + feature.slice(1)}`);
             try {
-                await fetch(`${API_BASE}/config`, {
+                await authFetch(`${API_BASE}/config`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ feature, enabled: checkbox.checked })
@@ -627,7 +745,7 @@
             };
             
             try {
-                const res = await fetch(`${API_BASE}/config`, {
+                const res = await authFetch(`${API_BASE}/config`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(config)
@@ -651,7 +769,7 @@
             if (!confirm('确定要重启服务吗？')) return;
             
             try {
-                await fetch(`${API_BASE}/restart`, { method: 'POST' });
+                await authFetch(`${API_BASE}/restart`, { method: 'POST' });
                 alert('服务正在重启...');
                 setTimeout(fetchStatus, 3000);
             } catch (e) {
@@ -675,7 +793,7 @@
             }
             
             try {
-                const res = await fetch(`${API_BASE}/cookies`, {
+                const res = await authFetch(`${API_BASE}/cookies`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ secure_1psid: psid, secure_1psidts: psidts })
@@ -713,7 +831,7 @@
                 msgEl.style.color = '#4fc3f7';
                 msgEl.textContent = '⏳ 正在重新连接 Gemini...';
                 
-                const res = await fetch(`${API_BASE}/reinit`, { method: 'POST' });
+                const res = await authFetch(`${API_BASE}/reinit`, { method: 'POST' });
                 const data = await res.json();
                 
                 if (res.ok) {
