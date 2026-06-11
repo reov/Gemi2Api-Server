@@ -934,7 +934,9 @@
                 
                 document.getElementById(loadingId).innerHTML = escapeHtml(reply);
             } catch (e) {
-                document.getElementById(loadingId).innerHTML = `<span style="color: #f44336;">错误: ${e.message}</span>`;
+                const el = document.getElementById(loadingId);
+                el.innerHTML = '<span style="color: #f44336;">错误: </span>';
+                el.appendChild(document.createTextNode(e.message));
             }
             
             chatMessages.scrollTop = chatMessages.scrollHeight;
