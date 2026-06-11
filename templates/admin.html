@@ -419,8 +419,7 @@
                     <input type="text" id="cookie1psidts" placeholder="粘贴 __Secure-1PSIDTS 的值" style="font-family: monospace; font-size: 12px;">
                 </div>
                 <div style="display: flex; gap: 10px; margin-top: 10px;">
-                    <button class="btn btn-success" onclick="saveCookies()">保存 Cookie</button>
-                    <button class="btn btn-primary" onclick="reinitClient()">重新连接 Gemini</button>
+                    <button class="btn btn-success" onclick="saveCookiesAndReinit()">💾 保存并重新连接 Gemini</button>
                 </div>
                 <div id="cookieMessage" style="margin-top: 10px; display: none; padding: 10px; border-radius: 6px;"></div>
             </div>
@@ -507,8 +506,7 @@
             </div>
             <div class="modal-buttons">
                 <button class="btn" style="background: #444; color: #fff;" onclick="closeModal()">取消</button>
-                <button class="btn btn-primary" onclick="saveConfig()">保存</button>
-                <button class="btn btn-success" onclick="restartService()">重启服务</button>
+                <button class="btn btn-primary" onclick="saveConfigAndRestart()">💾 保存并重启服务</button>
             </div>
         </div>
     </div>
@@ -641,6 +639,10 @@
                 document.getElementById('apiKeyStatus').textContent = data.api_key_enabled ? '已启用' : '未设置';
                 document.getElementById('cookieStatus').textContent = data.cookie_valid ? '有效' : '无效';
                 
+                // 显示脱敏的 Cookie 值
+                document.getElementById('cookie1psid').placeholder = data.secure_1psid_masked || '粘贴 __Secure-1PSID 的值';
+                document.getElementById('cookie1psidts').placeholder = data.secure_1psidts_masked || '粘贴 __Secure-1PSIDTS 的值';
+                
                 // 功能开关状态
                 document.getElementById('toggleThinking').checked = data.thinking_enabled || false;
                 document.getElementById('toggleTemporary').checked = data.temporary_chat || false;
@@ -736,8 +738,10 @@
             document.getElementById('configModal').classList.remove('active');
         }
 
-        // 保存配置
-        async function saveConfig() {
+        // 保存配置并重启服务
+        async function saveConfigAndRestart() {
+            if (!confirm('确定要保存配置并重启服务吗？')) return;
+            
             const config = {
                 host: document.getElementById('editHost').value,
                 port: parseInt(document.getElementById('editPort').value),
@@ -745,16 +749,16 @@
             };
             
             try {
-                const res = await authFetch(`${API_BASE}/config`, {
+                const res = await authFetch(`${API_BASE}/config-save-restart`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(config)
                 });
                 
                 if (res.ok) {
-                    alert('配置已保存，重启服务后生效');
+                    alert('配置已保存，服务正在重启...');
                     closeModal();
-                    fetchStatus();
+                    setTimeout(fetchStatus, 3000);
                 } else {
                     alert('保存失败');
                 }
@@ -764,22 +768,8 @@
             }
         }
 
-        // 重启服务
-        async function restartService() {
-            if (!confirm('确定要重启服务吗？')) return;
-            
-            try {
-                await authFetch(`${API_BASE}/restart`, { method: 'POST' });
-                alert('服务正在重启...');
-                setTimeout(fetchStatus, 3000);
-            } catch (e) {
-                console.error('重启失败:', e);
-                alert('重启失败: ' + e.message);
-            }
-        }
-
-        // 保存 Gemini Cookie
-        async function saveCookies() {
+        // 保存 Gemini Cookie 并重新连接
+        async function saveCookiesAndReinit() {
             const psid = document.getElementById('cookie1psid').value.trim();
             const psidts = document.getElementById('cookie1psidts').value.trim();
             const msgEl = document.getElementById('cookieMessage');
@@ -793,55 +783,29 @@
             }
             
             try {
-                const res = await authFetch(`${API_BASE}/cookies`, {
+                msgEl.style.display = 'block';
+                msgEl.style.background = '#1a2a3a';
+                msgEl.style.color = '#4fc3f7';
+                msgEl.textContent = '⏳ 正在保存 Cookie 并重新连接 Gemini...';
+                
+                const res = await authFetch(`${API_BASE}/cookies-save-reinit`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ secure_1psid: psid, secure_1psidts: psidts })
                 });
                 
                 const data = await res.json();
-                msgEl.style.display = 'block';
-                if (res.ok) {
+                if (res.ok && data.success) {
                     msgEl.style.background = '#1a3a1a';
                     msgEl.style.color = '#4caf50';
                     msgEl.textContent = '✅ ' + data.message;
                     document.getElementById('cookie1psid').value = '';
                     document.getElementById('cookie1psidts').value = '';
                     document.getElementById('cookieRaw').value = '';
-                    fetchStatus();
                 } else {
-                    msgEl.style.background = '#3a1a1a';
-                    msgEl.style.color = '#f44336';
-                    msgEl.textContent = '❌ ' + (data.detail || '保存失败');
-                }
-            } catch (e) {
-                msgEl.style.display = 'block';
-                msgEl.style.background = '#3a1a1a';
-                msgEl.style.color = '#f44336';
-                msgEl.textContent = '❌ 网络错误: ' + e.message;
-            }
-        }
-
-        // 重新初始化 Gemini 客户端
-        async function reinitClient() {
-            const msgEl = document.getElementById('cookieMessage');
-            try {
-                msgEl.style.display = 'block';
-                msgEl.style.background = '#1a2a3a';
-                msgEl.style.color = '#4fc3f7';
-                msgEl.textContent = '⏳ 正在重新连接 Gemini...';
-                
-                const res = await authFetch(`${API_BASE}/reinit`, { method: 'POST' });
-                const data = await res.json();
-                
-                if (res.ok) {
-                    msgEl.style.background = '#1a3a1a';
-                    msgEl.style.color = '#4caf50';
-                    msgEl.textContent = '✅ ' + data.message;
-                } else {
-                    msgEl.style.background = '#3a1a1a';
-                    msgEl.style.color = '#f44336';
-                    msgEl.textContent = '❌ ' + (data.detail || '重连失败');
+                    msgEl.style.background = '#3a2a1a';
+                    msgEl.style.color = '#ff9800';
+                    msgEl.textContent = '⚠️ ' + (data.message || '操作失败');
                 }
                 fetchStatus();
             } catch (e) {

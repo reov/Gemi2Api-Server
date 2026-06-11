@@ -24,6 +24,13 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 # 全局状态跟踪
 _start_time = time.time()
 _request_log = deque(maxlen=100)  # 保留最近100条日志
+
+
+def mask_cookie(value: str) -> str:
+    """对 Cookie 值进行脱敏显示：前4位 + *** + 后4位"""
+    if not value or len(value) <= 8:
+        return value or ""
+    return value[:4] + "***" + value[-4:]
 _stats = {
     "total_requests": 0,
     "error_count": 0,
@@ -217,6 +224,8 @@ async def get_status(token: str = Depends(verify_admin_token)):
         "port": PORT,
         "api_key_enabled": bool(API_KEY),
         "cookie_valid": cookie_valid,
+        "secure_1psid_masked": mask_cookie(SECURE_1PSID),
+        "secure_1psidts_masked": mask_cookie(SECURE_1PSIDTS),
         "thinking_enabled": ENABLE_THINKING,
         "temporary_chat": TEMPORARY_CHAT,
         "auto_delete_chat": AUTO_DELETE_CHAT,
@@ -283,6 +292,39 @@ async def update_config(config: ConfigUpdate, token: str = Depends(verify_admin_
     raise HTTPException(status_code=400, detail="无效的配置请求")
 
 
+@router.post("/api/config-save-restart")
+async def save_config_and_restart(config: ConfigUpdate, token: str = Depends(verify_admin_token)):
+    """保存配置并重启服务（一步完成）"""
+    env_updates = {}
+
+    if config.host is not None:
+        env_updates["HOST"] = config.host
+    if config.port is not None:
+        env_updates["PORT"] = str(config.port)
+    if config.api_key is not None:
+        env_updates["API_KEY"] = config.api_key
+
+    if env_updates:
+        write_env(env_updates)
+
+    # 重启服务
+    try:
+        python_path = sys.executable
+        script_path = os.path.abspath(__file__).replace("admin.py", "main.py")
+
+        subprocess.Popen(
+            [python_path, script_path],
+            cwd=os.path.dirname(script_path),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        import main
+        main.os._exit(0)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"重启失败: {str(e)}")
+
+
 @router.post("/api/restart")
 async def restart_service(token: str = Depends(verify_admin_token)):
     """重启服务"""
@@ -329,6 +371,42 @@ async def update_cookies(cookies: CookieUpdate, token: str = Depends(verify_admi
     main.SECURE_1PSIDTS = cookies.secure_1psidts
     
     return {"success": True, "message": "Cookie 已保存并生效"}
+
+
+@router.post("/api/cookies-save-reinit")
+async def save_cookies_and_reinit(cookies: CookieUpdate, token: str = Depends(verify_admin_token)):
+    """保存 Cookie 并重新连接 Gemini（一步完成）"""
+    if not cookies.secure_1psid or not cookies.secure_1psidts:
+        raise HTTPException(status_code=400, detail="Cookie 值不能为空")
+
+    # 保存到 .env 文件
+    write_env({
+        "SECURE_1PSID": cookies.secure_1psid,
+        "SECURE_1PSIDTS": cookies.secure_1psidts,
+    })
+
+    # 更新运行时变量
+    import main
+    main.SECURE_1PSID = cookies.secure_1psid
+    main.SECURE_1PSIDTS = cookies.secure_1psidts
+
+    # 重新初始化客户端
+    async with main.gemini_client_lock:
+        if main.gemini_client is not None:
+            try:
+                await main.gemini_client.close()
+            except Exception:
+                pass
+            main.gemini_client = None
+
+    try:
+        client = await main.get_gemini_client()
+        if client:
+            return {"success": True, "message": "Cookie 已保存，Gemini 重新连接成功"}
+        else:
+            return {"success": False, "message": "Cookie 已保存，但 Gemini 连接失败"}
+    except Exception as e:
+        return {"success": False, "message": f"Cookie 已保存，但 Gemini 重连失败: {str(e)}"}
 
 
 @router.post("/api/reinit")
