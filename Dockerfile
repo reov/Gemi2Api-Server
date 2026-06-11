@@ -8,6 +8,8 @@ RUN uv sync
 
 # Copy application code
 COPY main.py .
+COPY admin.py .
+COPY templates/ templates/
 COPY assets/ assets/
 
 # Expose the port the app runs on

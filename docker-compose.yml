@@ -4,9 +4,11 @@ services:
   gemini-api:
     build: .
     ports:
-      - "8000:8000"
+      - "${PORT:-8000}:${PORT:-8000}"
     volumes:
       - ./main.py:/app/main.py
+      - ./admin.py:/app/admin.py
+      - ./templates:/app/templates
       - ./pyproject.toml:/app/pyproject.toml
       - ./secrets:/app/secrets
     env_file:
