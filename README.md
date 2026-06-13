@@ -9,8 +9,8 @@
 
 | 平台 | 地址 | 面板密码 |
 |------|------|---------|
-| Render | [gemi2api-server-1ol5.onrender.com/admin/](https://gemi2api-server-1ol5.onrender.com/admin/) | `Gemi2Api-Server` |
-| HuggingFace | [zhiyu1998-gemi2api-server.hf.space/admin/](https://zhiyu1998-gemi2api-server.hf.space/admin/) | `Gemi2Api-Server` |
+| Render | [gemi2api-server-1ol5.onrender.com/admin/](https://gemi2api-server-1ol5.onrender.com/admin/) | `Gemi2Api-Server`（demo 专用，请勿用于生产） |
+| HuggingFace | [zhiyu1998-gemi2api-server.hf.space/admin/](https://zhiyu1998-gemi2api-server.hf.space/admin/) | `Gemi2Api-Server`（demo 专用，请勿用于生产） |
 
 > [!NOTE]
 > 以上体验地址未配置 Gemini Cookie，仅展示管理面板界面。如需完整功能请自行部署。
@@ -71,7 +71,7 @@ uvicorn main:app --reload --host 127.0.0.1 --port 7860
 ```
 
 > [!WARNING]
-> tips: 如果不填写 API_KEY ，面板默认密码为 `Gemi2Api-Server`
+> tips: `.env.example` 中默认设置了 `API_KEY=Gemi2Api-Server`，复制到 `.env` 后即可登录管理面板。**正式部署前请务必更换为强密码。**
 
 ## 使用 Docker 运行（推荐）
 
@@ -130,7 +130,7 @@ docker-compose up -d --build
 - 在线测试聊天
 
 > [!NOTE]
-> 未设置 `API_KEY` 时，管理面板默认密码为 `Gemi2Api-Server`。设置 `API_KEY` 后，需使用自定义密码登录。
+> 未设置 `API_KEY` 时管理面板不可用。密码通过 `.env` 文件中的 `API_KEY` 配置，`.env.example` 提供了默认值 `Gemi2Api-Server`，**正式部署前请务必更换**。
 
 ## 常见问题
 
