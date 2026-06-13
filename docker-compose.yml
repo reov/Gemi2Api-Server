@@ -4,7 +4,7 @@ services:
   gemini-api:
     build: .
     ports:
-      - "8000:8000"
+      - "8000:7860"
     volumes:
       - ./main.py:/app/main.py
       - ./pyproject.toml:/app/pyproject.toml
