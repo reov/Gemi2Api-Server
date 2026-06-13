@@ -13,7 +13,7 @@
 
 ### HuggingFace
 
-[![Deploy on Spaces](https://huggingface.co/datasets/huggingface/badges/resolve/main/deploy-on-spaces-md.svg)](https://huggingface.co/new-space?duplicate=true&repo=zhiyu1998/Gemi2Api-Server)
+[![Follow us on HF](https://huggingface.co/datasets/huggingface/badges/resolve/main/follow-us-on-hf-lg-dark.svg)](https://huggingface.co/new-space?duplicate=true&repo=zhiyu1998/Gemi2Api-Server)
 
 ## 直接运行
 
