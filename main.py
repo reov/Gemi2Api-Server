@@ -37,13 +37,29 @@ gemini_client = None
 gemini_client_lock = asyncio.Lock()
 
 
+async def _init_gemini_client_background():
+	"""Background task: initialize the Gemini client without blocking startup."""
+	try:
+		await get_gemini_client()
+		logger.info("Gemini client initialized successfully in background")
+	except Exception as e:
+		logger.warning(f"Gemini client init failed (service running without API access): {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-	"""Initialize the Gemini client during startup and close it on shutdown."""
-	await get_gemini_client()
+	"""Start Gemini client init in background; do not block FastAPI startup."""
+	init_task = asyncio.create_task(_init_gemini_client_background())
 	try:
 		yield
 	finally:
+		# Wait for background init to finish before cleaning up (or cancel if still running)
+		if not init_task.done():
+			init_task.cancel()
+			try:
+				await init_task
+			except asyncio.CancelledError:
+				pass
 		global gemini_client
 		if gemini_client is not None:
 			try:
