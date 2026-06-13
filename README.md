@@ -1,13 +1,3 @@
----
-title: Gemi2Api Server
-emoji: 🚀
-colorFrom: blue
-colorTo: green
-sdk: docker
-app_port: 7860
-pinned: false
----
-
 # Gemi2Api-Server
 [HanaokaYuzu / Gemini-API](https://github.com/HanaokaYuzu/Gemini-API) 的服务端简单实现
 
@@ -23,7 +13,7 @@ pinned: false
 
 ### HuggingFace
 
-[![Deploy to HuggingFace](https://img.shields.io/badge/%E7%82%B9%E5%87%BB%E9%83%A8%E7%BD%B2-%F0%9F%A4%97-fff)](https://huggingface.co/spaces/zhiyu1998/Gemi2Api-Server?duplicate=true)
+[![Deploy on Spaces](https://huggingface.co/datasets/huggingface/badges/resolve/main/deploy-on-spaces-md.svg)](https://huggingface.co/new-space?duplicate=true&repo=zhiyu1998/Gemi2Api-Server)
 
 ## 直接运行
 
