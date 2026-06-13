@@ -18,6 +18,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+
+def _get_version() -> str:
+    try:
+        return importlib.metadata.version("gemi2api-server")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
+
 # 创建路由器
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -227,7 +235,7 @@ async def get_status(token: str = Depends(verify_admin_token)):
 		"thinking_enabled": ENABLE_THINKING,
 		"temporary_chat": TEMPORARY_CHAT,
 		"auto_delete_chat": AUTO_DELETE_CHAT,
-		"version": importlib.metadata.version("gemi2api-server"),
+		"version": _get_version(),
 		"start_time": datetime.fromtimestamp(_start_time).strftime("%Y-%m-%d %H:%M:%S"),
 	}
 
