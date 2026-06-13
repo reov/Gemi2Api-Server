@@ -147,9 +147,9 @@ async def admin_login(req: LoginRequest):
 	"""管理面板登录验证"""
 	from main import API_KEY
 
-	# 如果没配置 API_KEY，不允许登录
+	# 未配置 API_KEY 时不允许登录
 	if not API_KEY:
-		raise HTTPException(status_code=400, detail="未配置 API_KEY，管理面板登录已禁用")
+		raise HTTPException(status_code=400, detail="未配置 API_KEY，管理面板不可用。请在 .env 中设置 API_KEY 后重启服务。")
 
 	if req.api_key != API_KEY:
 		raise HTTPException(status_code=401, detail="API_KEY 无效")
