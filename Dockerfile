@@ -13,7 +13,7 @@ COPY templates/ templates/
 COPY assets/ assets/
 
 # Expose the port the app runs on
-ENV PORT=8000
+ENV PORT=7860
 EXPOSE ${PORT}
 
 # Command to run the application
