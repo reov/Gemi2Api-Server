@@ -7,6 +7,8 @@ services:
       - "8000:7860"
     volumes:
       - ./main.py:/app/main.py
+      - ./admin.py:/app/admin.py
+      - ./templates:/app/templates
       - ./pyproject.toml:/app/pyproject.toml
       - ./secrets:/app/secrets
     env_file:
