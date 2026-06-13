@@ -18,11 +18,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Union
 from urllib.parse import quote, urlparse
 
-from dotenv import load_dotenv
-
-# 加载 .env 文件
-load_dotenv(Path(__file__).parent / ".env")
-
 import httpx
 import numpy as np
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
@@ -41,18 +36,11 @@ set_log_level("INFO")
 gemini_client = None
 gemini_client_lock = asyncio.Lock()
 
-# 服务配置（从环境变量读取，支持管理面板修改）
-HOST = os.environ.get("HOST", "0.0.0.0")
-PORT = int(os.environ.get("PORT", "8000"))
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 	"""Initialize the Gemini client during startup and close it on shutdown."""
-	try:
-		await get_gemini_client()
-	except Exception as e:
-		logger.warning(f"Gemini client initialization failed (service will run without API access): {e}")
+	await get_gemini_client()
 	try:
 		yield
 	finally:
@@ -67,11 +55,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Gemini API FastAPI Server", lifespan=lifespan)
-
-# 导入并集成管理面板
-from admin import router as admin_router, setup_middleware
-app.include_router(admin_router)
-setup_middleware(app)
 
 
 def get_gemini_webapi_version() -> str:
@@ -560,10 +543,8 @@ def map_model_name(openai_model_name: str) -> Model:
 		if normalized_openai_model_name in model_name.lower():
 			return m
 
-	# 如果找不到匹配项，使用默认映射（兼容旧版和新版模型名称）
+	# 如果找不到匹配项，使用默认映射
 	model_keywords = {
-		"gemini-3-pro": ["3", "pro"],
-		"gemini-3-flash": ["3", "flash"],
 		"gemini-pro": ["pro", "2.0"],
 		"gemini-pro-vision": ["vision", "pro"],
 		"gemini-flash": ["flash", "2.0"],
@@ -1122,6 +1103,6 @@ async def root():
 
 
 if __name__ == "__main__":
-    import uvicorn
+	import uvicorn
 
-    uvicorn.run("main:app", host=HOST, port=PORT, log_level="info")
+	uvicorn.run("main:app", host="0.0.0.0", port=7860, log_level="info")
