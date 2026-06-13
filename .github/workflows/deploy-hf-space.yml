@@ -5,6 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: deploy-hf-space
+  cancel-in-progress: true
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -14,9 +18,19 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Prepare Hugging Face README
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          cp README.hf.md README.md
+          git add README.md
+          if ! git diff --cached --quiet; then
+            git commit -m "Prepare Hugging Face Space README"
+          fi
+
       - name: Push to Hugging Face Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           git remote add space https://zhiyu1998:${HF_TOKEN}@huggingface.co/spaces/zhiyu1998/Gemi2Api-Server
-          git push --force space main
+          git push --force-with-lease space HEAD:main
