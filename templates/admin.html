@@ -895,11 +895,25 @@
                         stream: false
                     })
                 });
-                
-                const data = await res.json();
-                const reply = data.choices?.[0]?.message?.content || '抱歉，没有收到回复。';
-                
-                document.getElementById(loadingId).innerHTML = escapeHtml(reply);
+
+                if (!res.ok) {
+                    let errMsg;
+                    try {
+                        const errBody = await res.json();
+                        errMsg = errBody.error?.message || errBody.detail || JSON.stringify(errBody);
+                    } catch { errMsg = res.statusText || `HTTP ${res.status}`; }
+                    document.getElementById(loadingId).innerHTML = '';
+                    const span = document.createElement('span');
+                    span.style.color = '#f44336';
+                    span.textContent = `请求失败 (${res.status}): `;
+                    const el = document.getElementById(loadingId);
+                    el.appendChild(span);
+                    el.appendChild(document.createTextNode(errMsg));
+                } else {
+                    const data = await res.json();
+                    const reply = data.choices?.[0]?.message?.content || '抱歉，没有收到回复。';
+                    document.getElementById(loadingId).innerHTML = escapeHtml(reply);
+                }
             } catch (e) {
                 const el = document.getElementById(loadingId);
                 el.innerHTML = '<span style="color: #f44336;">错误: </span>';
