@@ -20,7 +20,7 @@ pinned: false
    - `SECURE_1PSID` — Gemini Cookie 中的 `__Secure-1PSID`
    - `SECURE_1PSIDTS` — Gemini Cookie 中的 `__Secure-1PSIDTS`
    - `API_KEY`（可选）— 自定义 API 访问密钥
-3. Space 启动后访问 `/admin` 进入管理面板
+3. Space 启动后访问 `/admin` 进入管理面板（默认密码：`Gemi2Api-Server`）
 
 ## 获取 Gemini Cookie
 
