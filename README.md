@@ -122,11 +122,9 @@ docker-compose up -d --build
 
 - 图片去水印算法基于 [journey-ad/gemini-watermark-remover](https://github.com/journey-ad/gemini-watermark-remover)以及[allenk/GeminiWatermarkTool](https://github.com/allenk/GeminiWatermarkTool)实现，并直接使用了其中的两张png图片。
 
-## 一键部署
+### HuggingFace
 
-[![Deploy to Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97-Deploy%20to%20Space-blue)](https://huggingface.co/spaces/zhiyu1998/Gemi2Api-Server?duplicate=true)
-
-点击上方按钮，一键复制到你自己的 Hugging Face Space，然后在 Space 设置中填入必要的环境变量即可。
+[![Deploy to HuggingFace](https://img.shields.io/badge/%E7%82%B9%E5%87%BB%E9%83%A8%E7%BD%B2-%F0%9F%A4%97-fff)](https://huggingface.co/spaces/zhiyu1998/Gemi2Api-Server?duplicate=true)
 
 ## 贡献
 
