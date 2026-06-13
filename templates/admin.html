@@ -885,7 +885,10 @@
             try {
                 const res = await fetch('/v1/chat/completions', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${adminToken}`
+                    },
                     body: JSON.stringify({
                         model: 'gemini-2.0-flash',
                         messages: [{ role: 'user', content: message }],

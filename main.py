@@ -496,9 +496,7 @@ class ModelList(BaseModel):
 async def verify_api_key(authorization: str = Header(None)):
 	"""
 	Verify the API key extracted from the Authorization header.
-
-	Raises:
-		HTTPException: If the authorization header is missing, incorrectly formatted, or the token is invalid.
+	Also accepts valid admin session tokens for the quick test chat.
 	"""
 	if not API_KEY:
 		# If API_KEY is not set in environment, skip validation (for development)
@@ -506,6 +504,14 @@ async def verify_api_key(authorization: str = Header(None)):
 
 	if not authorization:
 		raise HTTPException(status_code=401, detail="Missing Authorization header")
+
+	# Accept valid admin session tokens (for admin panel quick test)
+	if authorization.startswith("Bearer "):
+		token = authorization[7:]
+		from admin import _admin_sessions, _clean_expired_sessions
+		_clean_expired_sessions()
+		if token in _admin_sessions:
+			return
 
 	try:
 		scheme, token = authorization.split()
