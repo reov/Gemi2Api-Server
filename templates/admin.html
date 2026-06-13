@@ -477,6 +477,9 @@
                         <div class="chat-msg assistant">你好！我是 Gemini，有什么可以帮你的？</div>
                     </div>
                     <div class="chat-input">
+                        <select id="chatModel" style="background: #2a2a2a; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; padding: 8px 12px; font-size: 14px; min-width: 180px;">
+                            <option value="">加载模型中...</option>
+                        </select>
                         <input type="text" id="chatInput" placeholder="输入消息..." onkeypress="if(event.key==='Enter')sendTestMessage()">
                         <button class="btn btn-primary" onclick="sendTestMessage()">发送</button>
                     </div>
@@ -663,8 +666,9 @@
             try {
                 const res = await fetch('/v1/models');
                 const data = await res.json();
-                
+
                 const list = document.getElementById('modelList');
+                const select = document.getElementById('chatModel');
                 if (data.data && data.data.length > 0) {
                     list.innerHTML = data.data.map(m => `
                         <div class="model-item">
@@ -672,8 +676,13 @@
                             <span style="color: #888;">${escapeHtml(m.owned_by)}</span>
                         </div>
                     `).join('');
+                    // 填充快速测试模型下拉框，过滤掉 'unspecified'
+                    const models = data.data.filter(m => m.id !== 'unspecified');
+                    select.innerHTML = models.map(m => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.id)}</option>`).join('');
+                    if (select.options.length > 0) select.selectedIndex = 0;
                 } else {
                     list.innerHTML = '<div style="color: #666;">暂无可用模型</div>';
+                    select.innerHTML = '<option value="">无可用模型</option>';
                 }
             } catch (e) {
                 console.error('获取模型列表失败:', e);
@@ -883,6 +892,7 @@
             chatMessages.scrollTop = chatMessages.scrollHeight;
             
             try {
+                const model = document.getElementById('chatModel').value || 'gemini-3-flash';
                 const res = await fetch('/v1/chat/completions', {
                     method: 'POST',
                     headers: {
@@ -890,7 +900,7 @@
                         'Authorization': `Bearer ${adminToken}`
                     },
                     body: JSON.stringify({
-                        model: 'gemini-2.0-flash',
+                        model: model,
                         messages: [{ role: 'user', content: message }],
                         stream: false
                     })
